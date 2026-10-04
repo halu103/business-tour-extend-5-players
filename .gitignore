@@ -1,0 +1,11 @@
+.analysis/
+.sandbox/
+.tools/
+artifacts/
+dist/
+work/
+src/**/bin/
+src/**/obj/
+*.user
+*.suo
+

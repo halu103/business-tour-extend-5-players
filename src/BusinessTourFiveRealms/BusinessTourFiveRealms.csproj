@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>BusinessTourFiveRealms</AssemblyName>
+    <RootNamespace>BusinessTourFiveRealms</RootNamespace>
+    <Version>0.1.0</Version>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Deterministic>true</Deterministic>
+    <DebugType>portable</DebugType>
+    <BepInExRoot Condition="'$(BepInExRoot)' == ''">$(MSBuildProjectDirectory)\..\..\.sandbox\Business Tour\BepInEx</BepInExRoot>
+    <InteropDir Condition="'$(InteropDir)' == ''">$(BepInExRoot)\interop</InteropDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx.Core" HintPath="$(BepInExRoot)\core\BepInEx.Core.dll" Private="false" />
+    <Reference Include="BepInEx.Unity.IL2CPP" HintPath="$(BepInExRoot)\core\BepInEx.Unity.IL2CPP.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(BepInExRoot)\core\0Harmony.dll" Private="false" />
+    <Reference Include="Il2CppInterop.Runtime" HintPath="$(BepInExRoot)\core\Il2CppInterop.Runtime.dll" Private="false" />
+    <Reference Include="Il2Cppmscorlib" HintPath="$(InteropDir)\Il2Cppmscorlib.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(InteropDir)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="ACTk.Runtime" HintPath="$(InteropDir)\ACTk.Runtime.dll" Private="false" />
+    <Reference Include="PhotonRealtime" HintPath="$(InteropDir)\PhotonRealtime.dll" Private="false" />
+    <Reference Include="PhotonUnityNetworking" HintPath="$(InteropDir)\PhotonUnityNetworking.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(InteropDir)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(InteropDir)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(InteropDir)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(InteropDir)\UnityEngine.UIModule.dll" Private="false" />
+  </ItemGroup>
+
+  <Target Name="ValidateGameReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(InteropDir)\Assembly-CSharp.dll')" Text="Generated BepInEx interop assemblies were not found at $(InteropDir). Run the game once with BepInEx or pass /p:InteropDir=..." />
+  </Target>
+</Project>

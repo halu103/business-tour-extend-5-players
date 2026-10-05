@@ -23,6 +23,24 @@ internal static class RoomPlayersSettingsCapacityPatch
     private static void Postfix(RoomPlayersSettings __instance) => RoomCapacityRegistry.Register(__instance);
 }
 
+// Constructor detours are deliberately not installed on this Unity 6 IL2CPP
+// build. Il2CppInterop cannot use its constructor backend here and falls back
+// to a trampoline that has already caused unrelated UI corruption. Register
+// and resize the same object at its first normal method/property access.
+[HarmonyPatch(typeof(RoomPlayersSettings), nameof(RoomPlayersSettings.GetFreeSlotIndex))]
+internal static class RoomPlayersSettingsFreeSlotPatch
+{
+    private static void Prefix(RoomPlayersSettings __instance) =>
+        RoomCapacityRegistry.Register(__instance);
+}
+
+[HarmonyPatch(typeof(RoomPlayersSettings), nameof(RoomPlayersSettings.RoomPlayerInfos), MethodType.Getter)]
+internal static class RoomPlayersSettingsInfosPatch
+{
+    private static void Prefix(RoomPlayersSettings __instance) =>
+        RoomCapacityRegistry.Register(__instance);
+}
+
 [HarmonyPatch]
 internal static class StartupCapacityPatch
 {
@@ -64,8 +82,68 @@ internal static class GameConfigCapacityPatch
     new[] { typeof(IUIBinder<EventSource>), typeof(Transform), typeof(IContext), typeof(IInRoomPlayersLobbyEvent), typeof(IRoomSettings), typeof(int) })]
 internal static class PlayersPanelCapacityPatch
 {
-    private static void Prefix(ref int maxPLayerPanelsCount) =>
+    private static void Prefix(ref int maxPLayerPanelsCount)
+    {
+        int original = maxPLayerPanelsCount;
         maxPLayerPanelsCount = ModState.Capacity(maxPLayerPanelsCount);
+        if (maxPLayerPanelsCount != original)
+        {
+            Plugin.ModLog.LogInfo($"Creating private-lobby UI with {maxPLayerPanelsCount} player panels.");
+        }
+    }
+}
+
+[HarmonyPatch(typeof(PlayersPanelController), nameof(PlayersPanelController.CreatePlayerPanels))]
+internal static class PlayersPanelRuntimeAuditPatch
+{
+    private static void Prefix(PlayersPanelController __instance) =>
+        Plugin.ModLog.LogInfo($"CreatePlayerPanels prefix: {Describe(__instance)}");
+
+    private static void Postfix(PlayersPanelController __instance) =>
+        Plugin.ModLog.LogInfo($"CreatePlayerPanels postfix: {Describe(__instance)}");
+
+    private static string Describe(PlayersPanelController controller)
+    {
+        try
+        {
+            int panels = controller?._playerInfoPanels?.Length ?? -1;
+            int configs = controller?._avatarsConfigs?.Count ?? -1;
+            int providers = controller?._avatarProviders?.Count ?? -1;
+            int viewPanels = controller?._view?._panels?.Count ?? -1;
+            return $"panels={panels}, configs={configs}, providers={providers}, viewPanels={viewPanels}";
+        }
+        catch (Exception ex)
+        {
+            return $"unavailable ({ex.GetType().Name}: {ex.Message})";
+        }
+    }
+}
+
+[HarmonyPatch(typeof(NoBetLobbyController), nameof(NoBetLobbyController.Initialize),
+    new[] { typeof(IUIBinder<EventSource>), typeof(Il2CppReferenceArray<Il2CppSystem.Object>) })]
+internal static class NoBetLobbyCapacityPatch
+{
+    private static void Postfix(NoBetLobbyController __instance)
+    {
+        if (!ModState.IsSpecialMapActive)
+        {
+            return;
+        }
+
+        try
+        {
+            int panels = __instance?._playerPanelViews?.Count ?? -1;
+            int attributes = __instance?._playerAttributes?.Length ?? -1;
+            int controllers = __instance?._slotContolers?.Length ?? -1;
+            int avatars = __instance?._avatarsConfigs?.Count ?? -1;
+            int groupSlots = __instance?._playerGroup?._slotParents?.Length ?? -1;
+            Plugin.ModLog.LogInfo($"NoBet lobby audit: panels={panels}, attributes={attributes}, controllers={controllers}, avatars={avatars}, groupSlots={groupSlots}.");
+        }
+        catch (Exception ex)
+        {
+            Plugin.ModLog.LogWarning($"Could not audit the five-slot private lobby: {ex.Message}");
+        }
+    }
 }
 
 internal static class RoomCapacityRegistry
@@ -79,7 +157,26 @@ internal static class RoomCapacityRegistry
             return;
         }
 
-        Instances.Add(settings);
+        bool known = false;
+        for (int index = Instances.Count - 1; index >= 0; index--)
+        {
+            RoomPlayersSettings existing = Instances[index];
+            if (existing == null || existing.Pointer == IntPtr.Zero)
+            {
+                Instances.RemoveAt(index);
+                continue;
+            }
+
+            if (existing.Pointer == settings.Pointer)
+            {
+                known = true;
+            }
+        }
+
+        if (!known)
+        {
+            Instances.Add(settings);
+        }
         if (ModState.IsSpecialMapActive)
         {
             Resize(settings, ModState.FivePlayers);

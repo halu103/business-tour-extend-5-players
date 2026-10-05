@@ -29,6 +29,10 @@ public sealed class Plugin : BasePlugin
     public override void Load()
     {
         ModLog = Log;
+#if BT5_DIAGNOSTIC_NOOP
+        Log.LogInfo($"{Name} {Version} diagnostic no-op loaded; no game APIs or Harmony patches were touched.");
+        return;
+#else
         PreventAfkKick = Config.Bind("Connection", "PreventAfkTurnKick", true,
             "Prevents the vanilla kick after three forced skipped turns.");
         BackgroundKeepAliveSeconds = Config.Bind("Connection", "BackgroundKeepAliveSeconds", 86400,
@@ -42,9 +46,21 @@ public sealed class Plugin : BasePlugin
 
         ApplyConnectionSettings();
 
+#if BT5_DIAGNOSTIC_CONNECTION_ONLY
+        Log.LogInfo($"{Name} {Version} connection-only diagnostic loaded; Harmony patches were not installed.");
+        return;
+#else
+
         var harmony = new Harmony(Guid);
         PatchBootstrap.Apply(harmony, Log);
+#if BT5_DIAGNOSTIC_FORCE_SPECIAL_MAP
+        // Diagnostic builds can exercise the five-player/map-rendering path
+        // through Map Editor -> Bot Test without owning Business Tour Club.
+        ModState.SetSpecialMap(true, "diagnostic forced mode");
+#endif
         Log.LogInfo($"{Name} {Version} loaded. Vanilla maps remain 4-player; {ModState.DisplayName} activates 5-player mode.");
+#endif
+#endif
     }
 
     private static void ApplyConnectionSettings()
@@ -67,10 +83,10 @@ internal static class PatchBootstrap
 {
     private static readonly Type[] PatchTypes =
     {
+#if BT5_DIAGNOSTIC_PATCH_GROUP_A
         typeof(AfkHandlerPatch),
         typeof(ConnectionHandlerPatch),
         typeof(MapCollectionDefinitionsPatch),
-        typeof(MapSelectionContextCapturePatch),
         typeof(SpecialMapDefinitionTypePatch),
         typeof(SpecialMapPreviewPatch),
         typeof(SpecialMapScreenshotPatch),
@@ -78,17 +94,34 @@ internal static class PatchBootstrap
         typeof(MapSelectionInitializationAuditPatch),
         typeof(SelectedMapTrySelectPatch),
         typeof(MapSettingsDefinitionUpdatePatch),
-        typeof(MapSettingsDefinitionConstructorPatch),
-        typeof(MapSettingsStringConstructorPatch),
         typeof(MapSettingsStringUpdatePatch),
-        typeof(MapSettingsDataLoadPatch),
-        typeof(RoomSettingsCapacityPatch),
-        typeof(RoomPlayersSettingsCapacityPatch),
+        typeof(MapSettingsDataLoadPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GROUP_B1A
+        typeof(RoomPlayersSettingsFreeSlotPatch),
+        typeof(RoomPlayersSettingsInfosPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GROUP_B1B
         typeof(StartupCapacityPatch),
-        typeof(CreateRoomCommandCapacityPatch),
         typeof(RoomManagementCapacityPatch),
-        typeof(GameConfigCapacityPatch),
-        typeof(PlayersPanelCapacityPatch),
+        typeof(GameConfigCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_STARTUP_CAPACITY
+        typeof(StartupCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_ROOM_CAPACITY
+        typeof(RoomManagementCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GAME_CONFIG_CAPACITY
+        typeof(GameConfigCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_PLAYERS_PANEL_CAPACITY
+        typeof(PlayersPanelCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_PLAYERS_PANEL_RUNTIME
+        typeof(PlayersPanelRuntimeAuditPatch)
+#elif BT5_DIAGNOSTIC_PATCH_NO_BET_LOBBY_CAPACITY
+        typeof(NoBetLobbyCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GROUP_B1
+        typeof(RoomPlayersSettingsFreeSlotPatch),
+        typeof(RoomPlayersSettingsInfosPatch),
+        typeof(StartupCapacityPatch),
+        typeof(RoomManagementCapacityPatch),
+        typeof(GameConfigCapacityPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GROUP_B2
         typeof(UIPlayerGroupCountPatch),
         typeof(UIPlayerGroupAddChildPatch),
         typeof(UIVersusCountPatch),
@@ -96,6 +129,44 @@ internal static class PatchBootstrap
         typeof(UIVersusUpdateIndexesPatch),
         typeof(CompositeMapPatch),
         typeof(PentagonalBoardPatch)
+#elif BT5_DIAGNOSTIC_PATCH_GROUP_B
+        typeof(RoomPlayersSettingsFreeSlotPatch),
+        typeof(RoomPlayersSettingsInfosPatch),
+        typeof(StartupCapacityPatch),
+        typeof(RoomManagementCapacityPatch),
+        typeof(GameConfigCapacityPatch),
+        typeof(UIPlayerGroupCountPatch),
+        typeof(UIPlayerGroupAddChildPatch),
+        typeof(UIVersusCountPatch),
+        typeof(UIVersusUpdateCountPatch),
+        typeof(UIVersusUpdateIndexesPatch),
+        typeof(CompositeMapPatch),
+        typeof(PentagonalBoardPatch)
+#else
+        typeof(AfkHandlerPatch),
+        typeof(ConnectionHandlerPatch),
+        typeof(MapCollectionDefinitionsPatch),
+        typeof(SpecialMapDefinitionTypePatch),
+        typeof(SpecialMapPreviewPatch),
+        typeof(SpecialMapScreenshotPatch),
+        typeof(SpecialMapSelectionStatusPatch),
+        typeof(MapSelectionInitializationAuditPatch),
+        typeof(SelectedMapTrySelectPatch),
+        typeof(MapSettingsDefinitionUpdatePatch),
+        typeof(MapSettingsStringUpdatePatch),
+        typeof(MapSettingsDataLoadPatch),
+        typeof(RoomPlayersSettingsFreeSlotPatch),
+        typeof(RoomPlayersSettingsInfosPatch),
+        typeof(StartupCapacityPatch),
+        typeof(RoomManagementCapacityPatch),
+        typeof(UIPlayerGroupCountPatch),
+        typeof(UIPlayerGroupAddChildPatch),
+        typeof(UIVersusCountPatch),
+        typeof(UIVersusUpdateCountPatch),
+        typeof(UIVersusUpdateIndexesPatch),
+        typeof(CompositeMapPatch),
+        typeof(PentagonalBoardPatch)
+#endif
     };
 
     internal static void Apply(Harmony harmony, ManualLogSource log)

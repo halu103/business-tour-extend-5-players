@@ -82,8 +82,8 @@ internal static class PentagonalBoardPatch
         var oldPositions = new Vector3[count];
         float minX = float.PositiveInfinity;
         float maxX = float.NegativeInfinity;
-        float minY = float.PositiveInfinity;
-        float maxY = float.NegativeInfinity;
+        float minZ = float.PositiveInfinity;
+        float maxZ = float.NegativeInfinity;
 
         for (int index = 0; index < count; index++)
         {
@@ -91,30 +91,30 @@ internal static class PentagonalBoardPatch
             oldPositions[index] = position;
             minX = Mathf.Min(minX, position.x);
             maxX = Mathf.Max(maxX, position.x);
-            minY = Mathf.Min(minY, position.y);
-            maxY = Mathf.Max(maxY, position.y);
+            minZ = Mathf.Min(minZ, position.z);
+            maxZ = Mathf.Max(maxZ, position.z);
         }
 
         float width = maxX - minX;
-        float height = maxY - minY;
-        if (width < 0.01f || height < 0.01f)
+        float depth = maxZ - minZ;
+        if (width < 0.01f || depth < 0.01f)
         {
             throw new InvalidOperationException("Native board bounds are degenerate.");
         }
 
         float centerX = (minX + maxX) * 0.5f;
-        float centerY = (minY + maxY) * 0.5f;
+        float centerZ = (minZ + maxZ) * 0.5f;
         Vector2[] unitVertices = BuildPointedPentagon();
         Bounds2D unitBounds = Measure(unitVertices);
         float radiusX = width / unitBounds.Width;
-        float radiusY = height / unitBounds.Height;
+        float radiusZ = depth / unitBounds.Height;
 
         var vertices = new Vector2[5];
         for (int index = 0; index < vertices.Length; index++)
         {
             vertices[index] = new Vector2(
                 centerX + (unitVertices[index].x - unitBounds.CenterX) * radiusX,
-                centerY + (unitVertices[index].y - unitBounds.CenterY) * radiusY);
+                centerZ + (unitVertices[index].y - unitBounds.CenterY) * radiusZ);
         }
 
         int[] cornerCells = BuildCornerCells(count);
@@ -129,7 +129,7 @@ internal static class PentagonalBoardPatch
                 int cellIndex = rawIndex % count;
                 float progress = (rawIndex - start) / (float)intervals;
                 Vector2 point = Vector2.Lerp(vertices[side], vertices[(side + 1) % 5], progress);
-                newPositions[cellIndex] = new Vector3(point.x, point.y, oldPositions[cellIndex].z);
+                newPositions[cellIndex] = new Vector3(point.x, oldPositions[cellIndex].y, point.y);
             }
         }
 
@@ -143,10 +143,10 @@ internal static class PentagonalBoardPatch
             cell.Position = newPositions[index];
             if (transform != null && oldTangent.sqrMagnitude > 0.0001f && newTangent.sqrMagnitude > 0.0001f)
             {
-                float oldAngle = Mathf.Atan2(oldTangent.y, oldTangent.x) * Mathf.Rad2Deg;
-                float newAngle = Mathf.Atan2(newTangent.y, newTangent.x) * Mathf.Rad2Deg;
+                float oldAngle = Mathf.Atan2(oldTangent.z, oldTangent.x) * Mathf.Rad2Deg;
+                float newAngle = Mathf.Atan2(newTangent.z, newTangent.x) * Mathf.Rad2Deg;
                 float delta = Mathf.DeltaAngle(oldAngle, newAngle);
-                transform.rotation = Quaternion.AngleAxis(delta, Vector3.forward) * transform.rotation;
+                transform.rotation = Quaternion.AngleAxis(-delta, Vector3.up) * transform.rotation;
             }
         }
 

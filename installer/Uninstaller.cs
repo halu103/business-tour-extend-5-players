@@ -516,6 +516,10 @@ namespace BusinessTourFiveRealmsInstaller
                         MessageBox.Show(this,
                             uninstall ? "Đã gỡ Five Realms. BepInEx vẫn được giữ lại." : "Kiểm tra hoàn tất.",
                             "Five Realms", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        if (uninstall)
+                        {
+                            Close();
+                        }
                     }
                     else
                     {
@@ -574,13 +578,50 @@ namespace BusinessTourFiveRealmsInstaller
         [STAThread]
         private static int Main(string[] args)
         {
-            bool created;
-            using (var mutex = new Mutex(true, @"Local\BusinessTourFiveRealms.Uninstall", out created))
+            RemovalOptions options = null;
+            if (args.Length > 0)
             {
-                if (!created)
+                try
                 {
-                    MessageBox.Show("Một trình gỡ Five Realms khác đang chạy.", "Five Realms",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    options = RemovalOptions.Parse(args);
+                }
+                catch (ArgumentException error)
+                {
+                    Console.Error.WriteLine(error.Message);
+                    Console.Error.WriteLine(Usage);
+                    return 2;
+                }
+
+                if (options.ShowHelp)
+                {
+                    Console.WriteLine(Usage);
+                    return 0;
+                }
+                if (options.ShowVersion)
+                {
+                    Console.WriteLine(BuildInfo.ModVersion);
+                    return 0;
+                }
+            }
+
+            using (IDisposable instance = MaintenanceSingleInstance.TryAcquire())
+            {
+                if (instance == null)
+                {
+                    const string busyMessage =
+                        "Một cửa sổ cài đặt hoặc gỡ Five Realms đang mở. Hãy hoàn tất hoặc đóng cửa sổ đó trước.";
+                    if (args.Length == 0)
+                    {
+                        if (!MaintenanceSingleInstance.TryActivateExistingWindow())
+                        {
+                            MessageBox.Show(busyMessage, "Five Realms",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(busyMessage);
+                    }
                     return 4;
                 }
 
@@ -594,18 +635,6 @@ namespace BusinessTourFiveRealmsInstaller
 
                 try
                 {
-                    RemovalOptions options = RemovalOptions.Parse(args);
-                    if (options.ShowHelp)
-                    {
-                        Console.WriteLine(Usage);
-                        return 0;
-                    }
-                    if (options.ShowVersion)
-                    {
-                        Console.WriteLine(BuildInfo.ModVersion);
-                        return 0;
-                    }
-
                     string root = ResolveGameRoot(options.GameRoot);
                     using (var log = new RemovalLog(options.LogPath))
                     {

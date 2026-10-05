@@ -34,6 +34,9 @@ internal static class ModState
 
     internal static void SetSpecialMap(bool active, string source)
     {
+#if BT5_DIAGNOSTIC_FORCE_SPECIAL_MAP
+        active = true;
+#endif
         if (_specialMapActive == active)
         {
             return;

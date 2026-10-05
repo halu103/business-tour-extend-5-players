@@ -1,17 +1,188 @@
 using Microsoft.Win32;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace BusinessTourFiveRealmsInstaller
 {
+    internal static class MaintenanceSingleInstance
+    {
+        internal const string MutexName = @"Local\BusinessTourFiveRealms.Maintenance";
+        private static readonly string[] MutexNames =
+        {
+            MutexName,
+            @"Local\BusinessTourFiveRealms.Setup",
+            @"Local\BusinessTourFiveRealms.Uninstall"
+        };
+        private const int RestoreWindow = 9;
+
+        private sealed class Lease : IDisposable
+        {
+            private readonly List<Mutex> owned;
+
+            internal Lease(List<Mutex> ownedMutexes)
+            {
+                owned = ownedMutexes;
+            }
+
+            public void Dispose()
+            {
+                for (int index = owned.Count - 1; index >= 0; index--)
+                {
+                    try
+                    {
+                        owned[index].ReleaseMutex();
+                    }
+                    finally
+                    {
+                        owned[index].Dispose();
+                    }
+                }
+                owned.Clear();
+            }
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr window, int command);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr window);
+
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindow(IntPtr window, bool invert);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        internal static IDisposable TryAcquire()
+        {
+            var owned = new List<Mutex>();
+            try
+            {
+                foreach (string name in MutexNames)
+                {
+                    var mutex = new Mutex(false, name);
+                    bool acquired;
+                    try
+                    {
+                        acquired = mutex.WaitOne(0, false);
+                    }
+                    catch (AbandonedMutexException)
+                    {
+                        acquired = true;
+                    }
+
+                    if (!acquired)
+                    {
+                        mutex.Dispose();
+                        Release(owned);
+                        return null;
+                    }
+                    owned.Add(mutex);
+                }
+                return new Lease(owned);
+            }
+            catch
+            {
+                Release(owned);
+                throw;
+            }
+        }
+
+        private static void Release(List<Mutex> mutexes)
+        {
+            for (int index = mutexes.Count - 1; index >= 0; index--)
+            {
+                try
+                {
+                    mutexes[index].ReleaseMutex();
+                }
+                finally
+                {
+                    mutexes[index].Dispose();
+                }
+            }
+            mutexes.Clear();
+        }
+
+        internal static bool TryActivateExistingWindow()
+        {
+            using (Process current = Process.GetCurrentProcess())
+            {
+                int currentProcessId = current.Id;
+                int currentSessionId = current.SessionId;
+                string currentDirectory = Path.GetDirectoryName(current.MainModule.FileName);
+                foreach (string processName in new[]
+                {
+                    "BusinessTourFiveRealms-Setup",
+                    "BusinessTourFiveRealms-Uninstall"
+                })
+                {
+                    foreach (Process process in Process.GetProcessesByName(processName))
+                    {
+                        using (process)
+                        {
+                            if (process.Id == currentProcessId)
+                            {
+                                continue;
+                            }
+
+                            try
+                            {
+                                if (process.SessionId != currentSessionId ||
+                                    !String.Equals(Path.GetDirectoryName(process.MainModule.FileName), currentDirectory,
+                                        StringComparison.OrdinalIgnoreCase))
+                                {
+                                    continue;
+                                }
+
+                                process.Refresh();
+                                IntPtr window = process.MainWindowHandle;
+                                if (window == IntPtr.Zero)
+                                {
+                                    continue;
+                                }
+
+                                uint ownerProcessId;
+                                GetWindowThreadProcessId(window, out ownerProcessId);
+                                if (ownerProcessId != (uint)process.Id)
+                                {
+                                    continue;
+                                }
+
+                                ShowWindowAsync(window, RestoreWindow);
+                                if (!SetForegroundWindow(window))
+                                {
+                                    FlashWindow(window, true);
+                                }
+                                return true;
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // The other process exited between enumeration and activation.
+                            }
+                            catch (Win32Exception)
+                            {
+                                // Ignore inaccessible or already-exiting candidate processes.
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+    }
+
     internal sealed class PayloadManifest
     {
         public string ModId { get; set; }
@@ -740,4 +911,3 @@ namespace BusinessTourFiveRealmsInstaller
         }
     }
 }
-

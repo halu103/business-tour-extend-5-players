@@ -664,6 +664,10 @@ namespace BusinessTourFiveRealmsInstaller
                         MessageBox.Show(this,
                             install ? "Cài đặt hoàn tất." : "Kiểm tra hoàn tất, không phát hiện xung đột.",
                             "Five Realms", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        if (install)
+                        {
+                            Close();
+                        }
                     }
                     else
                     {
@@ -722,13 +726,50 @@ namespace BusinessTourFiveRealmsInstaller
         [STAThread]
         private static int Main(string[] args)
         {
-            bool created;
-            using (var mutex = new Mutex(true, @"Local\BusinessTourFiveRealms.Setup", out created))
+            SetupOptions options = null;
+            if (args.Length > 0)
             {
-                if (!created)
+                try
                 {
-                    MessageBox.Show("Một trình cài đặt Five Realms khác đang chạy.", "Five Realms",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    options = SetupOptions.Parse(args);
+                }
+                catch (ArgumentException error)
+                {
+                    Console.Error.WriteLine(error.Message);
+                    Console.Error.WriteLine(Usage);
+                    return 2;
+                }
+
+                if (options.ShowHelp)
+                {
+                    Console.WriteLine(Usage);
+                    return 0;
+                }
+                if (options.ShowVersion)
+                {
+                    Console.WriteLine(BuildInfo.ModVersion);
+                    return 0;
+                }
+            }
+
+            using (IDisposable instance = MaintenanceSingleInstance.TryAcquire())
+            {
+                if (instance == null)
+                {
+                    const string busyMessage =
+                        "Một cửa sổ cài đặt hoặc gỡ Five Realms đang mở. Hãy hoàn tất hoặc đóng cửa sổ đó trước.";
+                    if (args.Length == 0)
+                    {
+                        if (!MaintenanceSingleInstance.TryActivateExistingWindow())
+                        {
+                            MessageBox.Show(busyMessage, "Five Realms",
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(busyMessage);
+                    }
                     return 4;
                 }
 
@@ -742,18 +783,6 @@ namespace BusinessTourFiveRealmsInstaller
 
                 try
                 {
-                    SetupOptions options = SetupOptions.Parse(args);
-                    if (options.ShowHelp)
-                    {
-                        Console.WriteLine(Usage);
-                        return 0;
-                    }
-                    if (options.ShowVersion)
-                    {
-                        Console.WriteLine(BuildInfo.ModVersion);
-                        return 0;
-                    }
-
                     string root = ResolveGameRoot(options.GameRoot);
                     using (var log = new TextLog(options.LogPath))
                     {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
 using BusinessTour;
 using CodeStage.AntiCheat.ObscuredTypes;
 using HarmonyLib;
@@ -119,10 +120,11 @@ internal static class PlayersPanelRuntimeAuditPatch
     }
 }
 
-[HarmonyPatch(typeof(NoBetLobbyController), nameof(NoBetLobbyController.Initialize),
-    new[] { typeof(IUIBinder<EventSource>), typeof(Il2CppReferenceArray<Il2CppSystem.Object>) })]
+[HarmonyPatch(typeof(NoBetLobbyController), nameof(NoBetLobbyController.UpdatePlayers))]
 internal static class NoBetLobbyCapacityPatch
 {
+    private static string _lastSnapshot;
+
     private static void Postfix(NoBetLobbyController __instance)
     {
         if (!ModState.IsSpecialMapActive)
@@ -137,12 +139,54 @@ internal static class NoBetLobbyCapacityPatch
             int controllers = __instance?._slotContolers?.Length ?? -1;
             int avatars = __instance?._avatarsConfigs?.Count ?? -1;
             int groupSlots = __instance?._playerGroup?._slotParents?.Length ?? -1;
-            Plugin.ModLog.LogInfo($"NoBet lobby audit: panels={panels}, attributes={attributes}, controllers={controllers}, avatars={avatars}, groupSlots={groupSlots}.");
+            string snapshot = $"panels={panels}, attributes={attributes}, controllers={controllers}, avatars={avatars}, groupSlots={groupSlots}";
+            if (!string.Equals(snapshot, _lastSnapshot, StringComparison.Ordinal))
+            {
+                _lastSnapshot = snapshot;
+                Plugin.ModLog.LogInfo($"NoBet lobby audit after UpdatePlayers: slots={NoBetLobbyController.SLOTS_COUNT}, maxGuests={NoBetLobbyController.MAX_GUESTS_COUNT}, {snapshot}.");
+                Plugin.ModLog.LogInfo(DescribeHierarchy(__instance));
+            }
         }
         catch (Exception ex)
         {
             Plugin.ModLog.LogWarning($"Could not audit the five-slot private lobby: {ex.Message}");
         }
+    }
+
+    private static string DescribeHierarchy(NoBetLobbyController controller)
+    {
+        var result = new StringBuilder("NoBet lobby hierarchy:");
+        if (controller?._playerGroup?._slotParents != null)
+        {
+            for (int index = 0; index < controller._playerGroup._slotParents.Length; index++)
+            {
+                Transform slot = controller._playerGroup._slotParents[index];
+                result.Append($" slot[{index}]={Describe(slot)} children={slot?.childCount ?? -1};");
+            }
+        }
+
+        if (controller?._playerPanelViews != null)
+        {
+            for (int index = 0; index < controller._playerPanelViews.Count; index++)
+            {
+                MasterPlayerPanelView panel = controller._playerPanelViews[index];
+                result.Append($" panel[{index}]={Describe(panel?.transform)};");
+            }
+        }
+
+        return result.ToString();
+    }
+
+    private static string Describe(Transform transform)
+    {
+        if (transform == null)
+        {
+            return "null";
+        }
+
+        string parent = transform.parent == null ? "<root>" : transform.parent.name;
+        Vector3 position = transform.localPosition;
+        return $"{transform.name}@{parent} pos=({position.x:F1},{position.y:F1},{position.z:F1}) active={transform.gameObject.activeSelf}";
     }
 }
 

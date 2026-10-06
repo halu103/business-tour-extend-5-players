@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Text;
 using BusinessTour;
 using HarmonyLib;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
@@ -190,16 +191,67 @@ internal static class MapCollectionDefinitionsPatch
 [HarmonyPatch(typeof(UIMapSelectionController), MethodType.Constructor, new[] { typeof(IContext) })]
 internal static class MapSelectionContextCapturePatch
 {
+    internal static NoBetLobbyController ActiveLobbyController { get; private set; }
+
     private static void Postfix(IContext context)
     {
         try
         {
             MapCollectionDefinitionsPatch.Capture(context?.Get<MapCollection>());
+
+            NoBetLobbyController controller = context?.Get<NoBetLobbyController>();
+            if (controller != null && controller.Pointer != IntPtr.Zero)
+            {
+                ActiveLobbyController = controller;
+                Plugin.ModLog.LogInfo(Describe(controller));
+            }
         }
         catch (Exception ex)
         {
-            Plugin.ModLog.LogWarning($"Could not capture the map collection from the picker context: {ex.Message}");
+            Plugin.ModLog.LogWarning($"Could not capture the map picker context: {ex.Message}");
         }
+    }
+
+    private static string Describe(NoBetLobbyController controller)
+    {
+        var result = new StringBuilder("Captured initialized private lobby:");
+        result.Append($" panels={controller._playerPanelViews?.Count ?? -1}");
+        result.Append($", attributes={controller._playerAttributes?.Length ?? -1}");
+        result.Append($", controllers={controller._slotContolers?.Length ?? -1}");
+        result.Append($", avatarConfigs={controller._avatarsConfigs?.Count ?? -1}");
+        result.Append($", avatarProviders={controller._avatarProviders?.Count ?? -1}");
+        result.Append($", groupSlots={controller._playerGroup?._slotParents?.Length ?? -1}.");
+
+        if (controller._playerGroup?._slotParents != null)
+        {
+            for (int index = 0; index < controller._playerGroup._slotParents.Length; index++)
+            {
+                UnityEngine.Transform slot = controller._playerGroup._slotParents[index];
+                result.Append($" slot[{index}]={Describe(slot)} children={slot?.childCount ?? -1};");
+            }
+        }
+
+        if (controller._playerPanelViews != null)
+        {
+            for (int index = 0; index < controller._playerPanelViews.Count; index++)
+            {
+                result.Append($" panel[{index}]={Describe(controller._playerPanelViews[index]?.transform)};");
+            }
+        }
+
+        return result.ToString();
+    }
+
+    private static string Describe(UnityEngine.Transform transform)
+    {
+        if (transform == null)
+        {
+            return "null";
+        }
+
+        UnityEngine.Vector3 position = transform.localPosition;
+        string parent = transform.parent == null ? "<root>" : transform.parent.name;
+        return $"{transform.name}@{parent} pos=({position.x:F1},{position.y:F1},{position.z:F1}) active={transform.gameObject.activeSelf}";
     }
 }
 
@@ -368,15 +420,21 @@ internal static class MapSettingsStringConstructorPatch
 [HarmonyPatch(typeof(MapSettings), nameof(MapSettings.UpdateMapSettings), new[] { typeof(string), typeof(string), typeof(string), typeof(string) })]
 internal static class MapSettingsStringUpdatePatch
 {
-    private static void Prefix(string tableName)
+    private static void Postfix(MapSettings __instance)
     {
         if (MapSettingsDataLoadPatch.IsRemovingInternalTag)
         {
             return;
         }
 
+        // UpdateMapSettings(string, ...) is a partial-update API: an empty
+        // table name means "leave the current table unchanged".  Looking at
+        // the argument in a prefix therefore turns ordinary deck/rules/view
+        // synchronization into a false vanilla-map selection.  Read the
+        // effective value after the native method has applied the update so a
+        // real untagged room/map still disables Five Realms.
         ModState.SetSpecialMap(
-            ModState.IsTaggedMapPath(tableName),
+            ModState.IsTaggedMapPath(__instance?.TableName),
             "synchronized room map update");
     }
 }

@@ -144,8 +144,20 @@ New-Item -Path $artifactRoot -ItemType Directory -Force | Out-Null
 New-Item -Path $payloadRoot -ItemType Directory -Force | Out-Null
 New-Item -Path $generatedRoot -ItemType Directory -Force | Out-Null
 
-& $dotnet build $pluginProject -c Release --nologo
+$referenceRoot = Join-Path $GameRoot 'BepInEx'
+if (-not (Test-Path -LiteralPath (Join-Path $referenceRoot 'interop\Assembly-CSharp.dll') -PathType Leaf)) {
+    throw 'Open the compatible game with BepInEx once before building; current game interop references are required.'
+}
+& $dotnet build $pluginProject -c Release --nologo ("/p:BepInExRoot={0}" -f $referenceRoot)
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
+
+# Audit the newly built patch targets against this exact game's native bodies.
+# Unknown targets, unresolved addresses, and unreviewed aliases must stop packaging.
+& (Join-Path $PSScriptRoot 'Audit-NativePatchAliases.ps1') `
+    -GameRoot $GameRoot `
+    -PluginSource (Join-Path $projectRoot 'src\BusinessTourFiveRealms\Plugin.cs') `
+    -ModAssembly $pluginDll `
+    -FailOnUnsafeAliases
 
 $loaderRoot = Join-Path $workRoot 'loader'
 Expand-Archive -LiteralPath $bepInExZip -DestinationPath $loaderRoot -Force

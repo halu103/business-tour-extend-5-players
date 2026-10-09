@@ -9,16 +9,77 @@ namespace BusinessTourFiveRealms;
 [HarmonyPatch(typeof(MapConfig), nameof(MapConfig.CreateCopy))]
 internal static class CompositeMapPatch
 {
-    private static void Postfix(ref MapConfig __result)
+    private static readonly HashSet<IntPtr> ProcessedMaps = new HashSet<IntPtr>();
+    private static readonly Dictionary<IntPtr, MapConfig> PreparedCopies = new Dictionary<IntPtr, MapConfig>();
+
+    internal static void Reset()
     {
-        if (!ModState.IsSpecialMapActive || __result == null || __result._cellsArray == null)
+        ProcessedMaps.Clear();
+        PreparedCopies.Clear();
+    }
+
+    private static void Postfix(IMapConfig __0, ref MapConfig __result)
+    {
+        // A deep copy of a generated map already contains its traps. Applying
+        // generation again would turn another five cities into traps.
+        if (ModState.IsSpecialMapActive && __0 != null && __result != null &&
+            ProcessedMaps.Contains(__0.Pointer))
+        {
+            ProcessedMaps.Add(__result.Pointer);
+            return;
+        }
+        TryApply(__result, "MapConfig.CreateCopy");
+    }
+
+    internal static IMapConfig PrepareMapData(IMapConfig source, string caller)
+    {
+        if (!ModState.IsSpecialMapActive || source == null || source.Pointer == IntPtr.Zero ||
+            ProcessedMaps.Contains(source.Pointer))
+        {
+            return source;
+        }
+
+        if (PreparedCopies.TryGetValue(source.Pointer, out MapConfig prepared) && prepared != null)
+        {
+            return new IMapConfig(prepared.Pointer);
+        }
+
+        try
+        {
+            // Native CreateCopy deep-copies each CellData through serialization;
+            // never change the cached vanilla resource or its shared cells.
+            MapConfig copy = MapConfig.CreateCopy(source);
+            TryApply(copy, caller);
+            if (copy != null && ProcessedMaps.Contains(copy.Pointer))
+            {
+                PreparedCopies[source.Pointer] = copy;
+                return new IMapConfig(copy.Pointer);
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.ModLog.LogError($"Could not prepare Five Realms data from {caller}; using the safe base map: {ex}");
+        }
+        return source;
+    }
+
+    internal static void TryApply(MapConfig map, string source)
+    {
+        if (!ModState.IsSpecialMapActive || map == null || map.Pointer == IntPtr.Zero || map._cellsArray == null)
+        {
+            return;
+        }
+
+        if (ProcessedMaps.Contains(map.Pointer))
         {
             return;
         }
 
         try
         {
-            ApplyFiveRegions(__result, BuildSeed());
+            ApplyFiveRegions(map, BuildSeed());
+            ProcessedMaps.Add(map.Pointer);
+            Plugin.ModLog.LogDebug($"Five Realms map data applied from {source}.");
         }
         catch (Exception ex)
         {
@@ -82,6 +143,9 @@ internal static class CompositeMapPatch
             int cellIndex = candidates[random.Next(candidates.Count)];
             CellData data = map._cellsArray[cellIndex]._cellData;
             data._cellType = CellType.RogueTrap;
+            // RogueTrap's native card/prefab belongs to Fantasy. Retaining a
+            // Wonderland region skin asks its deck for a card it does not own.
+            data._cellSkin = CellSkin.Fantasy;
             data._trapSettings = new TrapSettings(
                 Math.Max(1, Plugin.TrapDurationTurns.Value),
                 (uint)Math.Max(0, Plugin.TrapReleaseCost.Value));
@@ -144,4 +208,41 @@ internal static class CompositeMapPatch
             return (int)(x % (uint)exclusiveMax);
         }
     }
+}
+
+[HarmonyPatch(typeof(Map), nameof(Map.Initialize), new[]
+{
+    typeof(IMapConfig),
+    typeof(BusinessTour.BoardDecorationsConfig.BuildingsDecorationsConfig)
+})]
+internal static class CompositeMapInitializationPatch
+{
+    private static void Prefix(ref IMapConfig __0)
+    {
+        __0 = CompositeMapPatch.PrepareMapData(__0, "Map.Initialize");
+    }
+}
+
+// Load(string) inlines the other overload in native 2.21, so patching only
+// Load(IMapConfig) misses that path. Intercept its resource-service result
+// before both Map.Initialize and the LocationLoaded event consume it.
+[HarmonyPatch(typeof(MapResourcesProcessor), nameof(MapResourcesProcessor.LoadMapConfig))]
+internal static class CompositeMapResourceLoadPatch
+{
+    private static void Postfix(ref IMapConfig __result) =>
+        __result = CompositeMapPatch.PrepareMapData(__result, "MapResourcesProcessor.LoadMapConfig");
+}
+
+[HarmonyPatch(typeof(LocationManager), nameof(LocationManager.Load), new[] { typeof(IMapConfig) })]
+internal static class CompositeMapLocationLoadPatch
+{
+    private static void Prefix(ref IMapConfig __0) =>
+        __0 = CompositeMapPatch.PrepareMapData(__0, "LocationManager.Load");
+}
+
+[HarmonyPatch(typeof(GameView), nameof(GameView.OnLocationLoaded))]
+internal static class CompositeMapVisualConfigPatch
+{
+    private static void Prefix(ref IMapConfig __1) =>
+        __1 = CompositeMapPatch.PrepareMapData(__1, "GameView.OnLocationLoaded");
 }

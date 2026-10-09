@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Text;
 using BusinessTour;
+using ExitGames.Client.Photon;
 using HarmonyLib;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 
@@ -159,13 +160,19 @@ internal static class MapCollectionDefinitionsPatch
         emptyDate.hasValue = false;
         special = new CustomMapDefinition(ModState.MapId, ModState.DisplayName, emptyDate, emptyDate)
         {
-            _Map_k__BackingField = ModState.AddMapTag(template.Map),
+            // Keep resource-facing map identifiers vanilla. Appending our
+            // marker here makes Map.Initialize request a non-existent config
+            // such as ClassicMap::BT5P1, so neither board nor gameplay UI is
+            // created. The mode is synchronized via a Photon room property.
+            _Map_k__BackingField = template.Map,
             _Cards_k__BackingField = template.Cards,
             _Rules_k__BackingField = template.Rules,
             _GameView_k__BackingField = template.GameView,
             _Skin_k__BackingField = template.Skin,
-            _ItemNumber_k__BackingField = "5P",
-            _ItemName_k__BackingField = "FiveRealms",
+            // These fields also participate in AssetBundle path generation.
+            // Reuse the base map's assets; ItemId remains our unique selector.
+            _ItemNumber_k__BackingField = template._ItemNumber_k__BackingField,
+            _ItemName_k__BackingField = template._ItemName_k__BackingField,
             _ItemType_k__BackingField = template._ItemType_k__BackingField,
             _ItemId_k__BackingField = ModState.MapId,
             _IsAlwaysAvailable_k__BackingField = true
@@ -200,6 +207,22 @@ internal static class MapSelectionContextCapturePatch
             MapCollectionDefinitionsPatch.Capture(context?.Get<MapCollection>());
 
             NoBetLobbyController controller = context?.Get<NoBetLobbyController>();
+            if (controller == null || controller.Pointer == IntPtr.Zero)
+            {
+                // The 2.21 context registers the lobby window through the
+                // generic UI manager rather than under its concrete controller
+                // type.  Resolve the already-open private lobby and wrap the
+                // same native object; constructing a new controller here would
+                // duplicate listeners and corrupt the room UI.
+                IUIManager<LogicAtomWindowLobby, WindowResult, EventSource> uiManager =
+                    context == null ? null : ContextExtensions.GetLobbyUIManager(context);
+                IWindow<LogicAtomWindowLobby, WindowResult, EventSource> window =
+                    uiManager?.GetWindow(LogicAtomWindowLobby.WndWithoutBet);
+                if (window != null && window.Pointer != IntPtr.Zero)
+                {
+                    controller = new NoBetLobbyController(window.Pointer);
+                }
+            }
             if (controller != null && controller.Pointer != IntPtr.Zero)
             {
                 ActiveLobbyController = controller;
@@ -255,18 +278,9 @@ internal static class MapSelectionContextCapturePatch
     }
 }
 
-[HarmonyPatch(typeof(CustomMapDefinition), nameof(CustomMapDefinition.DefinitionType), MethodType.Getter)]
-internal static class SpecialMapDefinitionTypePatch
-{
-    private static void Postfix(CustomMapDefinition __instance, ref MapDefinitionType __result)
-    {
-        if (ModState.IsSpecialId(__instance.ItemId))
-        {
-            __result = MapDefinitionType.OfficialMap;
-        }
-    }
-}
-
+// Never detour CustomMapDefinition.DefinitionType. Its constant-return body
+// is shared with 35 unrelated IL2CPP methods (including Spine timeline code).
+// Keep the native type and specialize only map-selector/resource consumers.
 [HarmonyPatch(typeof(SkinItemDefinitionBase), nameof(SkinItemDefinitionBase.PreviewPath), MethodType.Getter)]
 internal static class SpecialMapPreviewPatch
 {
@@ -372,11 +386,24 @@ internal static class SelectedMapTrySelectPatch
     private static MethodBase TargetMethod() =>
         AccessTools.Method(typeof(SelectedMapProvider), "TrySelect", new[] { typeof(int), typeof(string) });
 
+    private static bool Prefix(string defId, ref bool __result)
+    {
+        if (ModState.IsSpecialMapActive && !ModState.IsSpecialId(defId) && FifthLobbySlot.HasFifthOccupant())
+        {
+            __result = false;
+            Plugin.ModLog.LogWarning("Remove the fifth player from the private room before selecting a four-player map.");
+            return false;
+        }
+        return true;
+    }
+
     private static void Postfix(string defId, bool __result)
     {
         if (__result)
         {
-            ModState.SetSpecialMap(ModState.IsSpecialId(defId), "map selection");
+            bool special = ModState.IsSpecialId(defId);
+            ModState.SetSpecialMap(special, "map selection");
+            ModState.PublishRoomMode(special);
         }
     }
 }
@@ -404,39 +431,85 @@ internal static class MapSettingsDefinitionConstructorPatch
 [HarmonyPatch(typeof(MapSettings), MethodType.Constructor, new[] { typeof(string), typeof(string), typeof(string), typeof(string) })]
 internal static class MapSettingsStringConstructorPatch
 {
-    private static void Prefix(string tableName)
+    private static void Prefix(ref string tableName)
     {
         if (MapSettingsDataLoadPatch.IsRemovingInternalTag)
         {
             return;
         }
 
-        ModState.SetSpecialMap(
-            ModState.IsTaggedMapPath(tableName),
-            "synchronized room map");
+        // Recover old rooms made by the broken tagged-path build, while
+        // ensuring the suffix never reaches the native resource loader.
+        if (ModState.IsTaggedMapPath(tableName))
+        {
+            tableName = ModState.RemoveMapTag(tableName);
+            ModState.SetSpecialMap(true, "legacy synchronized room map");
+            return;
+        }
+
+        // Absence can be a partial initialization before Photon's local cache
+        // receives the property; preserve a host's just-made selection.
+        ModState.ApplyCurrentRoomMode("synchronized room map", false);
     }
 }
 
 [HarmonyPatch(typeof(MapSettings), nameof(MapSettings.UpdateMapSettings), new[] { typeof(string), typeof(string), typeof(string), typeof(string) })]
 internal static class MapSettingsStringUpdatePatch
 {
-    private static void Postfix(MapSettings __instance)
+    private static void Prefix(ref string tableName)
     {
         if (MapSettingsDataLoadPatch.IsRemovingInternalTag)
         {
             return;
         }
 
-        // UpdateMapSettings(string, ...) is a partial-update API: an empty
-        // table name means "leave the current table unchanged".  Looking at
-        // the argument in a prefix therefore turns ordinary deck/rules/view
-        // synchronization into a false vanilla-map selection.  Read the
-        // effective value after the native method has applied the update so a
-        // real untagged room/map still disables Five Realms.
-        ModState.SetSpecialMap(
-            ModState.IsTaggedMapPath(__instance?.TableName),
-            "synchronized room map update");
+        if (ModState.IsTaggedMapPath(tableName))
+        {
+            tableName = ModState.RemoveMapTag(tableName);
+            ModState.SetSpecialMap(true, "legacy synchronized room map update");
+            return;
+        }
+
+        ModState.ApplyCurrentRoomMode("synchronized room map update", false);
     }
+}
+
+[HarmonyPatch(typeof(RoomManagement), nameof(RoomManagement.OnJoinedRoom))]
+internal static class JoinedRoomModePatch
+{
+    private static void Postfix()
+    {
+        // A new private room receives its selected map before OnJoinedRoom.
+        // Its marker does not exist yet; clearing here discarded a host's
+        // persistent Five Realms selection and reverted the lobby to four.
+        if (ModState.ApplyCurrentRoomMode("joined room", false))
+        {
+            return;
+        }
+        if (Photon.Pun.PhotonNetwork.IsMasterClient)
+        {
+            ModState.PublishRoomMode(ModState.IsSpecialMapActive);
+        }
+        else
+        {
+            ModState.SetSpecialMap(false, "joined room (marker absent)");
+        }
+    }
+}
+
+[HarmonyPatch(typeof(RoomManagement), nameof(RoomManagement.OnRoomPropertiesUpdate))]
+internal static class RoomPropertiesModePatch
+{
+    // Use Harmony's positional argument name so this remains compatible when
+    // the game renames the metadata parameter between builds.
+    private static void Postfix(Hashtable __0) =>
+        ModState.ApplyRoomMode(__0, "room property update");
+}
+
+[HarmonyPatch(typeof(RoomManagement), nameof(RoomManagement.OnLeftRoom))]
+internal static class LeftRoomModePatch
+{
+    private static void Postfix() => ModState.SetSpecialMap(false, "left room");
 }
 
 [HarmonyPatch(typeof(MapSettingsUtils), nameof(MapSettingsUtils.GetMapDataFromSettings))]

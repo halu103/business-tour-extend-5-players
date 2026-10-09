@@ -53,6 +53,10 @@ public sealed class Plugin : BasePlugin
 
         var harmony = new Harmony(Guid);
         PatchBootstrap.Apply(harmony, Log);
+#if !BT5_DIAGNOSTIC_PATCH_GROUP_A
+        var updater = AddComponent<FifthLobbySlotUpdater>();
+        UnityEngine.Object.DontDestroyOnLoad(updater.gameObject);
+#endif
 #if BT5_DIAGNOSTIC_FORCE_SPECIAL_MAP
         // Diagnostic builds can exercise the five-player/map-rendering path
         // through Map Editor -> Bot Test without owning Business Tour Club.
@@ -87,7 +91,6 @@ internal static class PatchBootstrap
         typeof(AfkHandlerPatch),
         typeof(ConnectionHandlerPatch),
         typeof(MapCollectionDefinitionsPatch),
-        typeof(SpecialMapDefinitionTypePatch),
         typeof(SpecialMapPreviewPatch),
         typeof(SpecialMapScreenshotPatch),
         typeof(SpecialMapSelectionStatusPatch),
@@ -95,7 +98,10 @@ internal static class PatchBootstrap
         typeof(SelectedMapTrySelectPatch),
         typeof(MapSettingsDefinitionUpdatePatch),
         typeof(MapSettingsStringUpdatePatch),
-        typeof(MapSettingsDataLoadPatch)
+        typeof(MapSettingsDataLoadPatch),
+        typeof(JoinedRoomModePatch),
+        typeof(RoomPropertiesModePatch),
+        typeof(LeftRoomModePatch)
 #elif BT5_DIAGNOSTIC_PATCH_GROUP_B1A
         typeof(RoomPlayersSettingsFreeSlotPatch),
         typeof(RoomPlayersSettingsInfosPatch)
@@ -122,12 +128,11 @@ internal static class PatchBootstrap
         typeof(RoomManagementCapacityPatch),
         typeof(GameConfigCapacityPatch)
 #elif BT5_DIAGNOSTIC_PATCH_GROUP_B2
-        typeof(UIPlayerGroupCountPatch),
         typeof(UIPlayerGroupAddChildPatch),
-        typeof(UIVersusCountPatch),
         typeof(UIVersusUpdateCountPatch),
         typeof(UIVersusUpdateIndexesPatch),
         typeof(CompositeMapPatch),
+        typeof(CompositeMapInitializationPatch),
         typeof(PentagonalBoardPatch)
 #elif BT5_DIAGNOSTIC_PATCH_GROUP_B
         typeof(RoomPlayersSettingsFreeSlotPatch),
@@ -135,18 +140,16 @@ internal static class PatchBootstrap
         typeof(StartupCapacityPatch),
         typeof(RoomManagementCapacityPatch),
         typeof(GameConfigCapacityPatch),
-        typeof(UIPlayerGroupCountPatch),
         typeof(UIPlayerGroupAddChildPatch),
-        typeof(UIVersusCountPatch),
         typeof(UIVersusUpdateCountPatch),
         typeof(UIVersusUpdateIndexesPatch),
         typeof(CompositeMapPatch),
+        typeof(CompositeMapInitializationPatch),
         typeof(PentagonalBoardPatch)
 #else
         typeof(AfkHandlerPatch),
         typeof(ConnectionHandlerPatch),
         typeof(MapCollectionDefinitionsPatch),
-        typeof(SpecialMapDefinitionTypePatch),
         typeof(SpecialMapPreviewPatch),
         typeof(SpecialMapScreenshotPatch),
         typeof(SpecialMapSelectionStatusPatch),
@@ -155,17 +158,34 @@ internal static class PatchBootstrap
         typeof(MapSettingsDefinitionUpdatePatch),
         typeof(MapSettingsStringUpdatePatch),
         typeof(MapSettingsDataLoadPatch),
+        typeof(JoinedRoomModePatch),
+        typeof(RoomPropertiesModePatch),
+        typeof(LeftRoomModePatch),
         typeof(RoomPlayersSettingsFreeSlotPatch),
         typeof(RoomPlayersSettingsInfosPatch),
         typeof(StartupCapacityPatch),
         typeof(RoomManagementCapacityPatch),
-        typeof(UIPlayerGroupCountPatch),
         typeof(UIPlayerGroupAddChildPatch),
-        typeof(UIVersusCountPatch),
         typeof(UIVersusUpdateCountPatch),
         typeof(UIVersusUpdateIndexesPatch),
+        typeof(UIVersusShowPlayersPatch),
+        typeof(FivePlayerHudSeatsPatch),
+        typeof(FivePlayerHudRegistrationPatch),
+        typeof(FivePlayerHudLayoutPatch),
+        typeof(FivePlayerHudReleasePatch),
+        typeof(FivePlayerInventoryLayoutPatch),
+        typeof(FivePlayerInventoryBackgroundPatch),
+        typeof(FivePlayerPanelFactoryPatch),
+        typeof(FivePlayerPauseReleasePatch),
+        typeof(FivePlayerReplaySeedPatch),
         typeof(CompositeMapPatch),
-        typeof(PentagonalBoardPatch)
+        typeof(CompositeMapInitializationPatch),
+        typeof(CompositeMapResourceLoadPatch),
+        typeof(CompositeMapLocationLoadPatch),
+        typeof(CompositeMapVisualConfigPatch),
+        typeof(PentagonalBoardPatch),
+        typeof(PentagonalBackgroundPatch),
+        typeof(PentagonalSpriteSyncPatch)
 #endif
     };
 

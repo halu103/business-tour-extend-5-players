@@ -10,10 +10,10 @@ using UnityEngine;
 
 namespace BusinessTourFiveRealms;
 
-[HarmonyPatch(typeof(RoomSettings), MethodType.Constructor, new[] { typeof(int), typeof(IContext) })]
+[HarmonyPatch(typeof(RoomSettings), MethodType.Constructor, new[] { typeof(int), typeof(IContext), typeof(bool) })]
 internal static class RoomSettingsCapacityPatch
 {
-    private static void Prefix(ref int maximumPlayersCount) => maximumPlayersCount = ModState.Capacity(maximumPlayersCount);
+    private static void Prefix(ref int __0) => __0 = ModState.Capacity(__0);
 }
 
 [HarmonyPatch(typeof(RoomPlayersSettings), MethodType.Constructor, new[] { typeof(int) })]
@@ -53,10 +53,10 @@ internal static class StartupCapacityPatch
 }
 
 [HarmonyPatch(typeof(CreateRoomCommand), MethodType.Constructor,
-    new[] { typeof(IContext), typeof(IRoomSettings), typeof(IPlayersColorsDistribution), typeof(ITeamDistribution), typeof(byte), typeof(string) })]
+    new[] { typeof(IContext), typeof(IRoomSettings), typeof(byte), typeof(string) })]
 internal static class CreateRoomCommandCapacityPatch
 {
-    private static void Prefix(ref byte maxPlayersInRoom) => maxPlayersInRoom = ModState.Capacity(maxPlayersInRoom);
+    private static void Prefix(ref byte __2) => __2 = ModState.Capacity(__2);
 }
 
 [HarmonyPatch]

@@ -79,24 +79,17 @@ internal static class SlotExpander
     }
 }
 
-[HarmonyPatch(typeof(UIPlayerGroup), nameof(UIPlayerGroup.CountSlots), MethodType.Getter)]
-internal static class UIPlayerGroupCountPatch
-{
-    private static void Prefix(UIPlayerGroup __instance) => SlotExpander.Ensure(__instance);
-}
-
+// Do not patch CountSlots: Unity IL2CPP shares its native body with Spine
+// MeshGenerator.VertexCount and U2D VertexBuffer.bufferCount on build 25392206.
+// Expanding here would reinterpret those unrelated objects as lobby groups.
 [HarmonyPatch(typeof(UIPlayerGroup), nameof(UIPlayerGroup.AddChild))]
 internal static class UIPlayerGroupAddChildPatch
 {
     private static void Prefix(UIPlayerGroup __instance) => SlotExpander.Ensure(__instance);
 }
 
-[HarmonyPatch(typeof(UIVersus), nameof(UIVersus.CountSlots), MethodType.Getter)]
-internal static class UIVersusCountPatch
-{
-    private static void Prefix(UIVersus __instance) => SlotExpander.Ensure(__instance);
-}
-
+// Its CountSlots getter likewise shares a body with GoldPass.PlayerProgress
+// and UIWindowSelectOtherPlayer.HelpersCount. Expand at lifecycle methods.
 [HarmonyPatch(typeof(UIVersus), nameof(UIVersus.UpdateByCountPlayers))]
 internal static class UIVersusUpdateCountPatch
 {
@@ -109,3 +102,22 @@ internal static class UIVersusUpdateIndexesPatch
     private static void Prefix(UIVersus __instance) => SlotExpander.Ensure(__instance);
 }
 
+// Initialize calls ShowPlayers immediately after creating the view, before
+// UpdateByPlayerIndexes. Expanding only at the later method clones an already
+// populated fourth panel and never creates the fifth native avatar provider.
+// Expand here so ShowPlayers' native array-length loop initializes all five.
+[HarmonyPatch(typeof(UIVersusController), nameof(UIVersusController.ShowPlayers))]
+internal static class UIVersusShowPlayersPatch
+{
+    private static void Prefix(UIVersusController __instance)
+    {
+        try
+        {
+            if (__instance != null) SlotExpander.Ensure(__instance._uiVersus);
+        }
+        catch (Exception ex)
+        {
+            Plugin.ModLog.LogWarning($"Could not prepare five-player loading panels: {ex.Message}");
+        }
+    }
+}

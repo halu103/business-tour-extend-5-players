@@ -23,9 +23,12 @@
     <Reference Include="Assembly-CSharp" HintPath="$(InteropDir)\Assembly-CSharp.dll" Private="false" />
     <Reference Include="ACTk.Runtime" HintPath="$(InteropDir)\ACTk.Runtime.dll" Private="false" />
     <Reference Include="PhotonRealtime" HintPath="$(InteropDir)\PhotonRealtime.dll" Private="false" />
+    <Reference Include="Photon3Unity3D" HintPath="$(InteropDir)\Photon3Unity3D.dll" Private="false" />
     <Reference Include="PhotonUnityNetworking" HintPath="$(InteropDir)\PhotonUnityNetworking.dll" Private="false" />
+    <Reference Include="ResourceManagement" HintPath="$(InteropDir)\ResourceManagement.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="$(InteropDir)\UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(InteropDir)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.Physics2DModule" HintPath="$(InteropDir)\UnityEngine.Physics2DModule.dll" Private="false" />
     <Reference Include="UnityEngine.UI" HintPath="$(InteropDir)\UnityEngine.UI.dll" Private="false" />
     <Reference Include="UnityEngine.UIModule" HintPath="$(InteropDir)\UnityEngine.UIModule.dll" Private="false" />
   </ItemGroup>

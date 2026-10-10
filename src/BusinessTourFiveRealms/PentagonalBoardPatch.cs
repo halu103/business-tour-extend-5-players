@@ -39,6 +39,15 @@ internal static class PentagonalBoardPatch
     private static void Postfix(MapView __instance, ICameraService cameraService)
     {
         if (__instance == null) return;
+        if (!ModState.IsSpecialMapActive) { PentagonalSpriteGeometry.Reset(); return; }
+        CanonicalBoardPresentation.Apply(__instance, cameraService);
+    }
+
+    // Retained only as a diagnostic reference. This deformation is no longer
+    // used: native four-corner footprints cannot form five clean board edges.
+    private static void LegacyApply(MapView __instance, ICameraService cameraService)
+    {
+        if (__instance == null) return;
         if (!ModState.IsSpecialMapActive)
         {
             PentagonalSpriteGeometry.Reset();
@@ -73,13 +82,28 @@ internal static class PentagonalBoardPatch
             PentagonalSpriteGeometry.Reset();
             _lastCells = null;
             _lastPositions = null;
-            foreach (ICellView view in cells) EnsureFifthPawnPlace(new CellView(view.Pointer));
             var positions = new Vector3[cells.Count];
-            for (int index = 0; index < cells.Count; index++) positions[index] = cells[index].Position;
+            for (int index = 0; index < cells.Count; index++)
+            {
+                CellView cell = new CellView(cells[index].Pointer);
+                SpriteRenderer ground = cell._cellRenderer?._renderer;
+                // These centres are samples for a fitted native reference ring.
+                // They are NOT individual fan boundaries: trimmed regional art
+                // and the oversized native corner prefabs have different centres.
+                positions[index] = ground != null ? ground.bounds.center : cells[index].Position;
+                if (index % (cells.Count / 4) == 0)
+                    Plugin.ModLog.LogInfo($"Native corner ground {index}: pivot={cells[index].Position}, rendererCenter={ground?.bounds.center}, sprite={ground?.sprite?.name}, size={ground?.bounds.size}.");
+            }
             PentagonWarp warp = PentagonWarp.Create(positions);
             snapshots = new List<CellSnapshot>(cells.Count);
             foreach (ICellView view in cells) snapshots.Add(new CellSnapshot(new CellView(view.Pointer)));
-            foreach (CellSnapshot snapshot in snapshots) snapshot.Apply(warp);
+            // Capture the native five-entry arrays first. Reset must restore
+            // four-player cells, not retain the mod's sixth placement entry.
+            foreach (CellSnapshot snapshot in snapshots)
+            {
+                snapshot.AddFifthPawnPlace();
+                snapshot.Apply(warp);
+            }
             PentagonalSpriteGeometry.ActiveWarp = warp;
             __instance.SortCellsByOrder();
             PentagonalSpriteGeometry.SyncAll();
@@ -120,7 +144,7 @@ internal static class PentagonalBoardPatch
         return true;
     }
 
-    private static void EnsureFifthPawnPlace(CellView cell)
+    internal static Transform EnsureFifthPawnPlace(CellView cell)
     {
         // Native FreePlaces contains only indices 1..4; index 0 is reserved
         // for a lone centered pawn. Five serialized transforms are NOT five
@@ -131,7 +155,7 @@ internal static class PentagonalBoardPatch
         if (slots == null || slots.Length < 5 || points == null || points.Length < 5 ||
             orders == null || orders.Length < 5 || cell.FreePlaces == null)
             throw new InvalidOperationException("Cell has incomplete native pawn placement data.");
-        if (slots.Length >= 6) return;
+        if (slots.Length >= 6) return null;
         var expandedSlots = new Il2CppReferenceArray<Transform>(6);
         var expandedPoints = new Il2CppStructArray<Vector3>(6);
         var expandedOrders = new Il2CppStructArray<int>(6);
@@ -157,6 +181,7 @@ internal static class PentagonalBoardPatch
         cell._iconVisualPositions = expandedPoints;
         cell.IconVisualOrders = expandedOrders;
         if (!cell.FreePlaces.Contains(5)) cell.FreePlaces.Add(5);
+        return extra.transform;
     }
 
     private sealed class CellSnapshot
@@ -167,18 +192,37 @@ internal static class PentagonalBoardPatch
         private readonly List<Vector3[]> _colliderPaths = new();
         private readonly SpriteRenderer _renderer;
         private readonly Matrix4x4 _rendererMatrix;
+        private readonly PolygonCollider2D _collider;
+        private readonly Il2CppStructArray<Vector3> _nativeCorners;
+        private readonly Il2CppReferenceArray<Transform> _nativeSlots;
+        private readonly Il2CppStructArray<Vector3> _nativeIconPositions;
+        private readonly Il2CppStructArray<int> _nativeIconOrders;
+        private readonly Il2CppSystem.Collections.Generic.List<int> _nativeFreePlaces;
+        private readonly int[] _freePlaces;
         private readonly Vector3 _pressPosition;
         private readonly Vector3[] _iconPositions;
+        private Transform _extraPawnPlace;
 
         internal CellSnapshot(CellView cell)
         {
             _cell = cell;
             _pressPosition = cell._pressCellStartPosition;
-            if (cell._iconVisualPositions != null)
+            _nativeSlots = cell._slots;
+            _nativeIconPositions = cell._iconVisualPositions;
+            _nativeIconOrders = cell.IconVisualOrders;
+            _nativeCorners = cell._cornersArray;
+            _nativeFreePlaces = cell.FreePlaces;
+            if (_nativeFreePlaces != null)
             {
-                _iconPositions = new Vector3[cell._iconVisualPositions.Length];
+                _freePlaces = new int[_nativeFreePlaces.Count];
+                for (int index = 0; index < _freePlaces.Length; index++)
+                    _freePlaces[index] = _nativeFreePlaces[index];
+            }
+            if (_nativeIconPositions != null)
+            {
+                _iconPositions = new Vector3[_nativeIconPositions.Length];
                 for (int index = 0; index < _iconPositions.Length; index++)
-                    _iconPositions[index] = cell._iconVisualPositions[index];
+                    _iconPositions[index] = _nativeIconPositions[index];
             }
             CaptureAnchors(cell.transform);
             if (cell._cornersArray != null)
@@ -188,6 +232,7 @@ internal static class PentagonalBoardPatch
                     _corners[index] = cell.transform.TransformPoint(cell._cornersArray[index]);
             }
             PolygonCollider2D collider = cell._collider2D;
+            _collider = collider;
             if (collider != null)
             {
                 for (int path = 0; path < collider.pathCount; path++)
@@ -204,6 +249,13 @@ internal static class PentagonalBoardPatch
             }
             _renderer = cell._cellRenderer?._renderer;
             if (_renderer != null) _rendererMatrix = _renderer.transform.localToWorldMatrix;
+        }
+
+        internal void AddFifthPawnPlace()
+        {
+            _extraPawnPlace = EnsureFifthPawnPlace(_cell);
+            if (_extraPawnPlace != null)
+                _anchors.Add(new Anchor(_extraPawnPlace, _extraPawnPlace.position));
         }
 
         private void CaptureAnchors(Transform transform)
@@ -223,7 +275,7 @@ internal static class PentagonalBoardPatch
                 for (int index = 0; index < _corners.Length; index++)
                     _cell._cornersArray[index] = _cell.transform.InverseTransformPoint(warp.Map(_corners[index]));
             }
-            PolygonCollider2D collider = _cell._collider2D;
+            PolygonCollider2D collider = _collider;
             if (collider != null)
             {
                 for (int path = 0; path < _colliderPaths.Count; path++)
@@ -251,27 +303,48 @@ internal static class PentagonalBoardPatch
         internal void Restore()
         {
             foreach (Anchor anchor in _anchors)
-                if (anchor.Transform != null) anchor.Transform.position = anchor.Position;
+                try { if (anchor.Transform != null) anchor.Transform.position = anchor.Position; }
+                catch (Exception ex) { Plugin.ModLog.LogDebug($"Board anchor already released: {ex.Message}"); }
             if (_cell == null) return;
-            if (_corners != null && _cell._cornersArray != null)
-                for (int index = 0; index < Math.Min(_corners.Length, _cell._cornersArray.Length); index++)
-                    _cell._cornersArray[index] = _cell.transform.InverseTransformPoint(_corners[index]);
-            PolygonCollider2D collider = _cell._collider2D;
-            if (collider != null)
-                for (int path = 0; path < Math.Min(_colliderPaths.Count, collider.pathCount); path++)
-                {
-                    var points = new Il2CppStructArray<Vector2>(_colliderPaths[path].Length);
-                    for (int index = 0; index < points.Length; index++)
+            // Restore the exact objects captured, rather than writing into a
+            // replacement collider/array installed by a reconnect lifecycle.
+            try
+            {
+                if (_corners != null && _nativeCorners != null)
+                    for (int index = 0; index < Math.Min(_corners.Length, _nativeCorners.Length); index++)
+                        _nativeCorners[index] = _cell.transform.InverseTransformPoint(_corners[index]);
+                PolygonCollider2D collider = _collider;
+                if (collider != null)
+                    for (int path = 0; path < Math.Min(_colliderPaths.Count, collider.pathCount); path++)
                     {
-                        Vector3 local = collider.transform.InverseTransformPoint(_colliderPaths[path][index]);
-                        points[index] = new Vector2(local.x, local.y) - collider.offset;
+                        var points = new Il2CppStructArray<Vector2>(_colliderPaths[path].Length);
+                        for (int index = 0; index < points.Length; index++)
+                        {
+                            Vector3 local = collider.transform.InverseTransformPoint(_colliderPaths[path][index]);
+                            points[index] = new Vector2(local.x, local.y) - collider.offset;
+                        }
+                        collider.SetPath(path, points);
                     }
-                    collider.SetPath(path, points);
-                }
+            }
+            catch (Exception ex) { Plugin.ModLog.LogDebug($"Board hit area already released: {ex.Message}"); }
             _cell._pressCellStartPosition = _pressPosition;
-            if (_iconPositions != null && _cell._iconVisualPositions != null)
-                for (int index = 0; index < Math.Min(_iconPositions.Length, _cell._iconVisualPositions.Length); index++)
-                    _cell._iconVisualPositions[index] = _iconPositions[index];
+            _cell._slots = _nativeSlots;
+            _cell._iconVisualPositions = _nativeIconPositions;
+            _cell.IconVisualOrders = _nativeIconOrders;
+            if (_iconPositions != null && _nativeIconPositions != null)
+                for (int index = 0; index < _iconPositions.Length; index++)
+                    _nativeIconPositions[index] = _iconPositions[index];
+            if (_nativeFreePlaces != null && _freePlaces != null)
+            {
+                _nativeFreePlaces.Clear();
+                foreach (int place in _freePlaces) _nativeFreePlaces.Add(place);
+            }
+            if (_extraPawnPlace != null)
+            {
+                _extraPawnPlace.gameObject.SetActive(false);
+                UnityEngine.Object.Destroy(_extraPawnPlace.gameObject);
+                _extraPawnPlace = null;
+            }
         }
 
         private readonly struct Anchor
@@ -312,7 +385,7 @@ internal static class PentagonalBoardPatch
     private static readonly Lazy<GetColliderPathDelegate> GetColliderPathNative = new(() =>
         IL2CPP.ResolveICall<GetColliderPathDelegate>("UnityEngine.PolygonCollider2D::GetPath_Internal_Injected"));
 
-    private static unsafe Il2CppStructArray<Vector2> ReadColliderPath(PolygonCollider2D collider, int path)
+    internal static unsafe Il2CppStructArray<Vector2> ReadColliderPath(PolygonCollider2D collider, int path)
     {
         IntPtr method = PathUnmarshalMethod.Value;
         GetColliderPathDelegate getPath = GetColliderPathNative.Value;
@@ -340,6 +413,7 @@ internal sealed class PentagonWarp
     internal readonly Vector2[] Source;
     internal readonly Vector2[] Target;
     internal readonly bool PlaneXY;
+    internal int SectorCount => Source.Length;
     private readonly float _winding;
 
     private PentagonWarp(Vector2 center, Vector2[] source, Vector2[] target, bool planeXY)
@@ -347,6 +421,13 @@ internal sealed class PentagonWarp
         Center = center; Source = source; Target = target; PlaneXY = planeXY;
         _winding = Math.Sign(Cross(source[0] - center, source[1] - center));
         if (_winding == 0f) throw new InvalidOperationException("Degenerate board sector.");
+        for (int index = 0; index < source.Length; index++)
+        {
+            int next = (index + 1) % source.Length;
+            if (Cross(source[index] - center, source[next] - center) * _winding < 0.00001f ||
+                Cross(target[index] - center, target[next] - center) * _winding < 0.00001f)
+                throw new InvalidOperationException($"Board sector {index} would overlap or fold.");
+        }
     }
 
     internal static PentagonWarp Create(Vector3[] positions)
@@ -361,51 +442,117 @@ internal sealed class PentagonWarp
             minZ = Mathf.Min(minZ, point.z); maxZ = Mathf.Max(maxZ, point.z);
         }
         bool planeXY = maxY - minY >= maxZ - minZ;
-        float width = maxX - minX, height = planeXY ? maxY - minY : maxZ - minZ;
-        if (width < 0.01f || height < 0.01f) throw new InvalidOperationException("Degenerate board bounds.");
+        if (maxX - minX < 0.01f || (planeXY ? maxY - minY : maxZ - minZ) < 0.01f)
+            throw new InvalidOperationException("Degenerate board bounds.");
+        var native = new Vector2[positions.Length];
+        for (int index = 0; index < positions.Length; index++)
+            native[index] = new Vector2(positions[index].x, planeXY ? positions[index].y : positions[index].z);
+        Vector2[] source = FitNativeRing(native, out Vector2 center);
         var corners = new Vector2[4];
-        Vector2 center = Vector2.zero;
+        minX = minY = float.PositiveInfinity; maxX = maxY = float.NegativeInfinity;
         for (int index = 0; index < 4; index++)
         {
-            Vector3 point = positions[index * positions.Length / 4];
-            corners[index] = new Vector2(point.x, planeXY ? point.y : point.z);
-            center += corners[index] * 0.25f;
+            corners[index] = source[index * source.Length / 4];
+            minX = Mathf.Min(minX, corners[index].x); maxX = Mathf.Max(maxX, corners[index].x);
+            minY = Mathf.Min(minY, corners[index].y); maxY = Mathf.Max(maxY, corners[index].y);
         }
-        int upperSide = 0;
-        float upperScore = float.NegativeInfinity;
-        for (int index = 0; index < 4; index++)
+        float width = maxX - minX, height = maxY - minY;
+        // The former 8/8/4/4/8 layout merely pushed one square-side midpoint
+        // outwards. It stretched a few tiles while retaining four long sides.
+        // Instead distribute all cells over five equal sides (32 => 7/6/7/6/6).
+        // Fan knots follow one canonical four-sided ring, not individually
+        // trimmed sprite bounds. A raw-centre fan introduced slope kinks at
+        // oversized old corner cells, making the continuous inner/outer square
+        // boundaries look like notches and spikes. All homothetic reference
+        // rings now map to the same straight-edged pentagon, at every radius.
+        // Sprite meshes and colliders are still split on identical boundaries.
+        var target = new Vector2[positions.Length];
+        var pentagon = new Vector2[5];
+        var sideCounts = new int[5];
+        int[] regionStarts = FiveRealmsLayoutRules.RegionStarts(positions.Length);
+        float winding = Math.Sign(Cross(corners[0] - center, corners[1] - center));
+        if (winding == 0f) throw new InvalidOperationException("Degenerate native board winding.");
+        // Native boards are isometric artwork in XY, not a tilted 3D plane.
+        // Remove small mixed-prefab pivot skews while retaining that projection.
+        // The first corner remains the lower start tile, in the same direction
+        // as the original cell order; this does not change any board graph IDs.
+        float radiusX = width * 0.5f * 1.04f;
+        float radiusY = height * 0.5f * 1.04f;
+        float initialAngle = Mathf.Atan2((corners[0].y - center.y) / radiusY,
+            (corners[0].x - center.x) / radiusX);
+        float cardinalAngle = Mathf.Round(initialAngle / (Mathf.PI * 0.5f)) * Mathf.PI * 0.5f;
+        if (Mathf.Abs(initialAngle - cardinalAngle) < Mathf.PI / 12f)
+            initialAngle = cardinalAngle;
+        for (int side = 0; side < 5; side++)
         {
-            float score = corners[index].y + corners[(index + 1) % 4].y;
-            if (score > upperScore) { upperScore = score; upperSide = index; }
+            float angle = initialAngle + winding * side * Mathf.PI * 2f / 5f;
+            pentagon[side] = center + new Vector2(Mathf.Cos(angle) * radiusX, Mathf.Sin(angle) * radiusY);
+            sideCounts[side] = regionStarts[side + 1] - regionStarts[side];
         }
-        var source = new Vector2[5];
-        int output = 0, apexIndex = -1;
-        for (int index = 0; index < 4; index++)
+        if (!IsConvex(pentagon)) throw new InvalidOperationException("The five-sided target is not convex.");
+        int offset = 0;
+        for (int side = 0; side < 5; side++)
         {
-            source[output++] = corners[index];
-            if (index == upperSide)
-            {
-                apexIndex = output;
-                source[output++] = (corners[index] + corners[(index + 1) % 4]) * 0.5f;
-            }
+            for (int step = 0; step < sideCounts[side]; step++)
+                target[offset + step] = Vector2.LerpUnclamped(pentagon[side], pentagon[(side + 1) % 5],
+                    step / (float)sideCounts[side]);
+            offset += sideCounts[side];
         }
-        var target = (Vector2[])source.Clone();
-        Vector2 outward = (source[apexIndex] - center).normalized;
-        float extension = Mathf.Min(width, height) * 0.26f;
-        for (int attempt = 0; attempt < 8; attempt++)
+        Plugin.ModLog.LogInfo($"Balanced regular isometric pentagon: {positions.Length} cells, sides {string.Join("/", sideCounts)}, plane={(planeXY ? "XY" : "XZ")}; continuous {source.Length}-sector ground/collider warp.");
+        return new PentagonWarp(center, source, target, planeXY);
+    }
+
+    private static Vector2[] FitNativeRing(Vector2[] samples, out Vector2 center)
+    {
+        // The regular native side cells form an affine square. Least-squares
+        // fitting C + X*qx + Y*qy removes regional crop/pivot jitter. Exclude
+        // the four special corner sprites: their bounds have larger footprints
+        // and are not representative of the ring's centre line.
+        int sideLength = samples.Length / 4, count = 0;
+        Vector2 centerSum = Vector2.zero, xSum = Vector2.zero, ySum = Vector2.zero;
+        float xWeight = 0f, yWeight = 0f;
+        for (int index = 0; index < samples.Length; index++)
         {
-            target[apexIndex] = source[apexIndex] + outward * extension;
-            if (IsConvex(target))
-            {
-                string points = string.Empty;
-                for (int index = 0; index < corners.Length; index++)
-                    points += $" corner[{index * positions.Length / 4}]=({corners[index].x:F2},{corners[index].y:F2})";
-                Plugin.ModLog.LogInfo($"Five-sided layout split native side {upperSide} ({upperSide * positions.Length / 4}..{((upperSide + 1) * positions.Length / 4) % positions.Length}), apex=({target[apexIndex].x:F2},{target[apexIndex].y:F2}), plane={(planeXY ? "XY" : "XZ")};{points}.");
-                return new PentagonWarp(center, source, target, planeXY);
-            }
-            extension *= 0.65f;
+            if (index % sideLength == 0) continue;
+            Vector2 coordinate = SquareCoordinate(index, sideLength);
+            centerSum += samples[index]; count++;
+            xSum += samples[index] * coordinate.x;
+            ySum += samples[index] * coordinate.y;
+            xWeight += coordinate.x * coordinate.x;
+            yWeight += coordinate.y * coordinate.y;
         }
-        throw new InvalidOperationException("The five-sided target would fold the board.");
+        if (count < 4 || xWeight < 0.0001f || yWeight < 0.0001f)
+            throw new InvalidOperationException("Insufficient native cells for the square reference grid.");
+        // Symmetric samples on all four sides have sum(q)=sum(qx*qy)=0,
+        // so the three least-squares normal equations are diagonal.
+        center = centerSum / count;
+        Vector2 xAxis = xSum / xWeight, yAxis = ySum / yWeight;
+        if (Mathf.Abs(Cross(xAxis, yAxis)) < 0.0001f)
+            throw new InvalidOperationException("Degenerate native square reference grid.");
+        var fitted = new Vector2[samples.Length];
+        float maxResidual = 0f;
+        for (int index = 0; index < samples.Length; index++)
+        {
+            Vector2 coordinate = SquareCoordinate(index, sideLength);
+            fitted[index] = center + xAxis * coordinate.x + yAxis * coordinate.y;
+            if (index % sideLength != 0)
+                maxResidual = Mathf.Max(maxResidual, (samples[index] - fitted[index]).magnitude);
+        }
+        Plugin.ModLog.LogInfo($"Native square reference fitted from {count} non-corner ground sprites: X=({xAxis.x:F3},{xAxis.y:F3}), Y=({yAxis.x:F3},{yAxis.y:F3}), max crop/pivot residual={maxResidual:F3}.");
+        return fitted;
+    }
+
+    private static Vector2 SquareCoordinate(int index, int sideLength)
+    {
+        int side = index / sideLength;
+        float fraction = (index % sideLength) / (float)sideLength;
+        return side switch
+        {
+            0 => new Vector2(-fraction, -1f + fraction),
+            1 => new Vector2(-1f + fraction, fraction),
+            2 => new Vector2(fraction, 1f - fraction),
+            _ => new Vector2(1f - fraction, -fraction)
+        };
     }
 
     private static bool IsConvex(Vector2[] polygon)
@@ -428,13 +575,13 @@ internal sealed class PentagonWarp
     {
         Vector2 relative = Planar(point) - Center;
         int sector = 0;
-        for (int index = 0; index < 5; index++)
+        for (int index = 0; index < Source.Length; index++)
         {
-            Vector2 a = Source[index] - Center, b = Source[(index + 1) % 5] - Center;
+            Vector2 a = Source[index] - Center, b = Source[(index + 1) % Source.Length] - Center;
             if (Cross(a, relative) * _winding >= -0.0001f && Cross(relative, b) * _winding >= -0.0001f)
             { sector = index; break; }
         }
-        int next = (sector + 1) % 5;
+        int next = (sector + 1) % Source.Length;
         Vector2 first = Source[sector] - Center, second = Source[next] - Center;
         float denominator = Cross(first, second);
         float u = Cross(relative, second) / denominator, v = Cross(first, relative) / denominator;
@@ -447,7 +594,7 @@ internal sealed class PentagonWarp
         Vector2 relative = Planar(point) - Center;
         return first
             ? Cross(Source[sector] - Center, relative) * _winding
-            : Cross(relative, Source[(sector + 1) % 5] - Center) * _winding;
+            : Cross(relative, Source[(sector + 1) % Source.Length] - Center) * _winding;
     }
 
     internal List<Vector3> SplitEdges(Vector3[] polygon)
@@ -484,6 +631,9 @@ internal sealed class PentagonWarp
 internal static class PentagonalSpriteGeometry
 {
     private static readonly Dictionary<IntPtr, SpriteProxy> Proxies = new();
+    private static Camera _fittedCamera;
+    private static Vector3 _originalCameraPosition;
+    private static float _originalCameraSize;
     internal static PentagonWarp ActiveWarp { get; set; }
 
     internal static void Add(SpriteRenderer renderer, Matrix4x4 sourceMatrix, PentagonWarp warp, bool isBackground = false)
@@ -501,20 +651,31 @@ internal static class PentagonalSpriteGeometry
 
     internal static void Reset()
     {
+        CanonicalBoardPresentation.Restore();
         PentagonalBoardPatch.RestoreApplied();
         ActiveWarp = null;
         foreach (SpriteProxy proxy in Proxies.Values)
             try { proxy.Dispose(true); }
             catch (Exception ex) { Plugin.ModLog.LogDebug($"Board sprite already released: {ex.Message}"); }
         Proxies.Clear();
+        try
+        {
+            if (_fittedCamera != null)
+            {
+                _fittedCamera.transform.position = _originalCameraPosition;
+                _fittedCamera.orthographicSize = _originalCameraSize;
+            }
+        }
+        catch (Exception ex) { Plugin.ModLog.LogDebug($"Board camera already released: {ex.Message}"); }
+        _fittedCamera = null;
     }
 
     internal static void FitCamera(Camera camera)
     {
         if (camera == null || !camera.orthographic) return;
-        float required = camera.orthographicSize;
+        float minX = float.PositiveInfinity, maxX = float.NegativeInfinity;
+        float minY = float.PositiveInfinity, maxY = float.NegativeInfinity;
         float aspect = Mathf.Max(0.1f, camera.aspect);
-        float margin = Mathf.Max(0.25f, required * 0.025f);
         foreach (SpriteProxy proxy in Proxies.Values)
         {
             if (!proxy.IsAlive || proxy.IsBackground) continue;
@@ -526,24 +687,45 @@ internal static class PentagonalSpriteGeometry
                     (corner & 2) == 0 ? -bounds.extents.y : bounds.extents.y,
                     (corner & 4) == 0 ? -bounds.extents.z : bounds.extents.z);
                 Vector3 local = camera.transform.InverseTransformPoint(point);
-                required = Mathf.Max(required, Mathf.Max(Mathf.Abs(local.y), Mathf.Abs(local.x) / aspect) + margin);
+                minX = Mathf.Min(minX, local.x); maxX = Mathf.Max(maxX, local.x);
+                minY = Mathf.Min(minY, local.y); maxY = Mathf.Max(maxY, local.y);
             }
         }
-        if (required > camera.orthographicSize + 0.01f)
+        if (float.IsInfinity(minX)) return;
+        if (_fittedCamera == null || _fittedCamera.Pointer != camera.Pointer)
         {
-            Plugin.ModLog.LogInfo($"Expanded five-sided camera fit from {camera.orthographicSize:F2} to {required:F2}.");
-            camera.orthographicSize = required;
+            _fittedCamera = camera;
+            _originalCameraPosition = camera.transform.position;
+            _originalCameraSize = camera.orthographicSize;
         }
+        // Keep the board out of the five-seat rail and the top-right native
+        // toolbar. The extra world-space margin accommodates upright buildings
+        // whose sprite heights are intentionally not flattened by the warp.
+        const float left = 0.20f, right = 0.03f, top = 0.12f, bottom = 0.08f;
+        const float artMargin = 0.65f;
+        float boardHalfX = (maxX - minX) * 0.5f + artMargin;
+        float boardHalfY = (maxY - minY) * 0.5f + artMargin;
+        float required = Mathf.Max(boardHalfX / (aspect * (1f - left - right)),
+            boardHalfY / (1f - top - bottom));
+        float viewportCenterX = (left + 1f - right) * 0.5f;
+        float viewportCenterY = (bottom + 1f - top) * 0.5f;
+        float shiftX = (minX + maxX) * 0.5f - (viewportCenterX - 0.5f) * 2f * required * aspect;
+        float shiftY = (minY + maxY) * 0.5f - (viewportCenterY - 0.5f) * 2f * required;
+        camera.transform.position += camera.transform.right * shiftX + camera.transform.up * shiftY;
+        camera.orthographicSize = required;
+        Plugin.ModLog.LogDebug($"Five-sided camera fit size={required:F2}, HUD rail={left:P0}, toolbar margin={top:P0}.");
     }
 
     internal static void Sync(CellRenderer renderer)
     {
+        CanonicalBoardPresentation.Sync(renderer);
         SpriteRenderer native = renderer?._renderer;
         if (native != null && Proxies.TryGetValue(native.Pointer, out SpriteProxy proxy)) proxy.Sync();
     }
 
     internal static void SyncAll()
     {
+        CanonicalBoardPresentation.SyncAll();
         var stale = new List<IntPtr>();
         foreach (var entry in Proxies)
         {
@@ -563,9 +745,19 @@ internal static class PentagonalSpriteGeometry
         SpriteRenderer renderer = view?._background?._backgroundSprite;
         if (renderer != null && !Proxies.ContainsKey(renderer.Pointer))
         {
+            LogBackgroundRenderers(view._background.transform);
             Add(renderer, renderer.transform.localToWorldMatrix, ActiveWarp, true);
             Plugin.ModLog.LogInfo($"Applied matching five-sided warp to background sprite {renderer.name}.");
         }
+    }
+
+    private static void LogBackgroundRenderers(Transform node)
+    {
+        if (node == null) return;
+        SpriteRenderer sprite = node.GetComponent<SpriteRenderer>();
+        if (sprite != null)
+            Plugin.ModLog.LogInfo($"Native background sprite {node.name}: sprite={sprite.sprite?.name}, position={node.position}, bounds={sprite.bounds.center}/{sprite.bounds.size}, active={node.gameObject.activeInHierarchy}.");
+        for (int child = 0; child < node.childCount; child++) LogBackgroundRenderers(node.GetChild(child));
     }
 
     private sealed class SpriteProxy
@@ -691,7 +883,7 @@ internal static class PentagonalSpriteGeometry
             }
             for (int index = 0; index + 2 < nativeTriangles.Length; index += 3)
             {
-                for (int sector = 0; sector < 5; sector++)
+                for (int sector = 0; sector < _warp.SectorCount; sector++)
                 {
                     var polygon = new List<Vertex>
                     {
@@ -758,7 +950,11 @@ internal static class PentagonalBackgroundPatch
 {
     private static void Postfix(GameView __instance)
     {
-        try { PentagonalSpriteGeometry.WarpBackground(__instance); }
+        try
+        {
+            if (CanonicalBoardPresentation.IsActive) CanonicalBoardPresentation.ReplaceBackground(__instance);
+            else PentagonalSpriteGeometry.WarpBackground(__instance);
+        }
         catch (Exception ex) { Plugin.ModLog.LogWarning($"Five-sided background warp failed: {ex.Message}"); }
     }
 }

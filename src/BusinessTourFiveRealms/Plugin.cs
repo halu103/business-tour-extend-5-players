@@ -17,7 +17,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string Guid = "vn.businesstour.fiverealms";
     public const string Name = "Business Tour Five Realms";
-    public const string Version = "0.1.0";
+    public const string Version = "0.2.0";
 
     internal static ManualLogSource ModLog { get; private set; } = null!;
     internal static ConfigEntry<bool> PreventAfkKick { get; private set; } = null!;
@@ -162,6 +162,7 @@ internal static class PatchBootstrap
         typeof(RoomPropertiesModePatch),
         typeof(LeftRoomModePatch),
         typeof(RoomPlayersSettingsFreeSlotPatch),
+        typeof(FifthLobbyReleasePatch),
         typeof(RoomPlayersSettingsInfosPatch),
         typeof(StartupCapacityPatch),
         typeof(RoomManagementCapacityPatch),

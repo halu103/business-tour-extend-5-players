@@ -123,6 +123,8 @@ internal static class ModState
         _specialMapActive = active;
         FifthPlayerColors.Apply(active);
         RoomCapacityRegistry.Apply(active);
+        FifthLobbySlot.ApplyMode(active);
+        SlotExpander.ApplyMode(active);
         if (active)
         {
             FivePlayerHud.EnsureSeatMapping();

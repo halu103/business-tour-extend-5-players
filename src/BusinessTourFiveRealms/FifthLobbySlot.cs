@@ -25,6 +25,13 @@ public sealed class FifthLobbySlotUpdater : MonoBehaviour
         Plugin.ModLog.LogInfo("Five Realms runtime updater awakened.");
     }
 
+    public void LateUpdate()
+    {
+        // Native loading-card animations write the old four-seat transforms
+        // after ShowPlayers. Fit only our active five-seat views after them.
+        SlotExpander.ReflowActiveVersus();
+    }
+
     public void Update()
     {
         if (!_reportedFirstUpdate)
@@ -122,6 +129,49 @@ internal static class FifthLobbySlot
                 Plugin.ModLog.LogWarning("Fifth private-lobby slot is unavailable: " + ex);
             }
         }
+    }
+
+    internal static void ApplyMode(bool active)
+    {
+        LobbyState state = _current;
+        if (state == null) return;
+        try
+        {
+            if (state.Controller == null || !state.MatchesGeneration(state.Controller))
+            {
+                _current = null;
+                return;
+            }
+            if (active)
+            {
+                if (state.IsCreated)
+                {
+                    state.Ensure();
+                    state.SetVisible(true);
+                }
+            }
+            else if (!HasFifthOccupant())
+            {
+                state.RestoreVanillaResources();
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.ModLog.LogWarning("Could not restore private-lobby capacity immediately: " + ex.Message);
+        }
+    }
+
+    internal static void OnLobbyClosing(NoBetLobbyController controller)
+    {
+        LobbyState state = _current;
+        if (state == null || controller == null || state.Controller.Pointer != controller.Pointer) return;
+        // Native OnClose releases and clears its current avatar-provider list.
+        // A dormant fifth was deliberately removed from that four-item list,
+        // so it needs separate cleanup. An attached fifth is left to native
+        // cleanup, never released twice by this hook.
+        _current = null;
+        try { state.Retire(); }
+        catch (Exception ex) { Plugin.ModLog.LogDebug("Fifth lobby was already released: " + ex.Message); }
     }
 
     internal static void EnsureFromContext(IContext context)
@@ -258,7 +308,8 @@ internal static class FifthLobbySlot
             // card visible too, so a map change cannot conceal a real player.
             var slots = new RoomPlayersSettings(controller.RoomPlayersSettings.Pointer)._roomPlayersInfos;
             bool occupied = slots != null && slots.Length > SlotIndex && slots[SlotIndex] != null;
-            _current.SetVisible(occupied);
+            if (!occupied) _current.RestoreVanillaResources();
+            else _current.SetVisible(true);
             if (occupied)
             {
                 _current.Refresh(false);
@@ -282,6 +333,15 @@ internal static class FifthLobbySlot
         private OtherPlayerPanelView _panel;
         private PlayerAttributes _attributes;
         private PlayerAttributeProvider _attributeProvider;
+        private readonly Il2CppReferenceArray<IPlayerAttributes> _vanillaAttributes;
+        private readonly Il2CppReferenceArray<Il2CppSystem.ValueTuple<InputType, int>> _vanillaControllers;
+        private Il2CppReferenceArray<IPlayerAttributes> _fiveAttributes;
+        private Il2CppReferenceArray<Il2CppSystem.ValueTuple<InputType, int>> _fiveControllers;
+        private Il2CppReferenceArray<IPlayerAttributesConfig> _vanillaAttributeConfigs;
+        private Il2CppReferenceArray<IPlayerAttributesConfig> _fiveAttributeConfigs;
+        private AvatarOrPortraitConfig _fifthAvatarConfig;
+        private IAvatarController _fifthAvatarProvider;
+        private bool _resourcesAttached;
         private bool _created;
         private bool _attempted;
         private bool? _visible;
@@ -309,6 +369,8 @@ internal static class FifthLobbySlot
             Controller = controller;
             Group = controller._playerGroup;
             _binder = binder;
+            _vanillaAttributes = controller._playerAttributes;
+            _vanillaControllers = controller._slotContolers;
             _layoutWasEnabled = Group._group != null && Group._group.enabled;
             Plugin.ModLog.LogInfo("Fifth-slot setup: reading existing slot transforms.");
             for (int index = 0; index < ModState.VanillaPlayers; index++)
@@ -340,6 +402,7 @@ internal static class FifthLobbySlot
             }
             if (_created)
             {
+                AttachRetainedResources();
                 return;
             }
             if (_attempted)
@@ -421,8 +484,10 @@ internal static class FifthLobbySlot
 
             Plugin.ModLog.LogInfo("Fifth-slot setup: extending controller and pawn-attribute arrays.");
             Controller._slotContolers = Expand(Controller._slotContolers, ModState.FivePlayers);
+            _fiveControllers = Controller._slotContolers;
             Controller._slotContolers[SlotIndex] = new Il2CppSystem.ValueTuple<InputType, int>(InputType.Standart, 0);
             Controller._playerAttributes = Expand(Controller._playerAttributes, ModState.FivePlayers);
+            _fiveAttributes = Controller._playerAttributes;
             _attributes = Controller._playerAttributes[SlotIndex] == null
                 ? new PlayerAttributes()
                 : new PlayerAttributes(Controller._playerAttributes[SlotIndex].Pointer);
@@ -450,15 +515,97 @@ internal static class FifthLobbySlot
                 Controller._avatarsConfigs.Add(config);
                 Controller._avatarProviders.Add(provider);
             }
+            _fifthAvatarConfig = Controller._avatarsConfigs[SlotIndex];
+            _fifthAvatarProvider = Controller._avatarProviders[SlotIndex];
 
             Plugin.ModLog.LogInfo("Fifth-slot setup: binding fifth-seat actions.");
             BindFifthActions();
             Plugin.ModLog.LogInfo("Fifth-slot setup: updating fifth input selector.");
             Controller.UpdateSlotPanel(SlotIndex);
             _created = true;
+            _resourcesAttached = true;
             Plugin.ModLog.LogInfo($"Created functional private-lobby slot 5: panels={Controller._playerPanelViews.Count}, " +
                 $"attributes={Controller._playerAttributes.Length}, avatars={Controller._avatarsConfigs.Count}, " +
                 $"controllers={Controller._slotContolers.Length}, internalSlots={roomPlayers._roomPlayersInfos.Length}.");
+        }
+
+        private void AttachRetainedResources()
+        {
+            if (_resourcesAttached) return;
+            SlotExpander.Ensure(Group);
+            Controller._playerAttributes = _fiveAttributes;
+            Controller._slotContolers = _fiveControllers;
+            if (_attributeProvider != null) _attributeProvider._configs = _fiveAttributeConfigs;
+            AppendRetained(Controller._playerPanelViews, new MasterPlayerPanelView(_panel.Pointer));
+            AppendRetained(Controller._avatarsConfigs, _fifthAvatarConfig);
+            AppendRetained(Controller._avatarProviders, _fifthAvatarProvider);
+            _resourcesAttached = true;
+            _snapshot = null;
+            Plugin.ModLog.LogDebug("Reattached the existing fifth lobby resources without adding callbacks.");
+        }
+
+        internal void RestoreVanillaResources()
+        {
+            bool hadResources = _resourcesAttached;
+            // Release pawn visuals while its fifth config is still reachable.
+            // Keep its one set of callbacks dormant on the retained attributes;
+            // reselecting Five Realms reuses it instead of binding duplicates.
+            if (_resourcesAttached && _attributes != null) _attributes.Release();
+            SetVisible(false);
+            if (_fiveAttributes != null && Controller._playerAttributes?.Pointer == _fiveAttributes.Pointer)
+                Controller._playerAttributes = _vanillaAttributes;
+            if (_fiveControllers != null && Controller._slotContolers?.Pointer == _fiveControllers.Pointer)
+                Controller._slotContolers = _vanillaControllers;
+            if (_attributeProvider != null && _fiveAttributeConfigs != null &&
+                _attributeProvider._configs?.Pointer == _fiveAttributeConfigs.Pointer)
+                _attributeProvider._configs = _vanillaAttributeConfigs;
+            RemoveRetained(Controller._playerPanelViews,
+                _panel == null ? null : new MasterPlayerPanelView(_panel.Pointer));
+            RemoveRetained(Controller._avatarsConfigs, _fifthAvatarConfig);
+            RemoveRetained(Controller._avatarProviders, _fifthAvatarProvider);
+            SlotExpander.Restore(Group);
+            _resourcesAttached = false;
+            _snapshot = null;
+            if (hadResources)
+                Plugin.ModLog.LogInfo($"Restored vanilla private-lobby resources: slots={Group._slotParents.Length}, " +
+                    $"panels={Controller._playerPanelViews.Count}, attributes={Controller._playerAttributes.Length}, " +
+                    $"controllers={Controller._slotContolers.Length}, avatars={Controller._avatarsConfigs.Count}, " +
+                    $"providers={Controller._avatarProviders.Count}, pawnConfigs={_attributeProvider?._configs?.Length ?? 0}.");
+        }
+
+        internal void Retire()
+        {
+            _created = false;
+            _resourcesAttached = false;
+            IAvatarController extra = _fifthAvatarProvider;
+            _fifthAvatarProvider = null;
+            _fifthAvatarConfig = null;
+            if (extra == null) return;
+            var providers = Controller._avatarProviders;
+            if (providers != null)
+                for (int index = 0; index < providers.Count; index++)
+                    if (providers[index]?.Pointer == extra.Pointer) return;
+            // Ownership, not merely mode, decides this: OnClose is also used
+            // when entering a five-player match while that mode stays active.
+            extra.Release();
+            Plugin.ModLog.LogDebug("Released the dormant fifth lobby avatar outside native four-player cleanup.");
+        }
+
+        private static void AppendRetained<T>(Il2CppSystem.Collections.Generic.List<T> list, T extra)
+            where T : Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase
+        {
+            if (list == null || extra == null) throw new InvalidOperationException("Retained fifth lobby resource is missing.");
+            if (list.Count == ModState.VanillaPlayers) list.Add(extra);
+            else if (list.Count != ModState.FivePlayers || list[SlotIndex]?.Pointer != extra.Pointer)
+                throw new InvalidOperationException("Native lobby resources belong to a different generation.");
+        }
+
+        private static void RemoveRetained<T>(Il2CppSystem.Collections.Generic.List<T> list, T extra)
+            where T : Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase
+        {
+            if (list != null && extra != null && list.Count == ModState.FivePlayers &&
+                list[SlotIndex]?.Pointer == extra.Pointer)
+                list.RemoveAt(SlotIndex);
         }
 
         private OtherPlayerPanelView CreateOtherPlayerPanel(string prefabName)
@@ -505,6 +652,8 @@ internal static class FifthLobbySlot
                 new IPlayerAttributesEvents(_attributes.Pointer), _panel.PlayerIconPlaceholder,
                 _panel.PlayerDicePlaceholder, null);
             var expanded = Expand(configs, ModState.FivePlayers);
+            _vanillaAttributeConfigs = configs;
+            _fiveAttributeConfigs = expanded;
             expanded[SlotIndex] = new IPlayerAttributesConfig(config.Pointer);
             _attributeProvider._configs = expanded;
 
@@ -730,6 +879,14 @@ internal static class FifthLobbySlot
         }
         return expanded;
     }
+}
+
+// Build 25392206 has a unique native body for this concrete void lifecycle
+// method. Do not detour a generic UI close/release body shared by other views.
+[HarmonyPatch(typeof(NoBetLobbyController), nameof(NoBetLobbyController.OnClose))]
+internal static class FifthLobbyReleasePatch
+{
+    private static void Prefix(NoBetLobbyController __instance) => FifthLobbySlot.OnLobbyClosing(__instance);
 }
 
 // Every vanilla lobby panel also receives the expanded palette. Protect the

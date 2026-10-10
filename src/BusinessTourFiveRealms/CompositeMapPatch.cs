@@ -21,7 +21,7 @@ internal static class CompositeMapPatch
     private static void Postfix(IMapConfig __0, ref MapConfig __result)
     {
         // A deep copy of a generated map already contains its traps. Applying
-        // generation again would turn another five cities into traps.
+        // generation again would add traps beyond the hard two-trap budget.
         if (ModState.IsSpecialMapActive && __0 != null && __result != null &&
             ProcessedMaps.Contains(__0.Pointer))
         {
@@ -95,6 +95,14 @@ internal static class CompositeMapPatch
             return;
         }
 
+        int existingTraps = 0;
+        for (int index = 0; index < cellCount; index++)
+            if (map._cellsArray[index]?._cellData?._cellType == CellType.RogueTrap) existingTraps++;
+        // Check before mutating the copy. Do not silently turn a native
+        // non-city cell into a city with incomplete city data.
+        if (existingTraps > FiveRealmsLayoutRules.MaximumTraps)
+            throw new InvalidOperationException("The base map exceeds the two-trap budget.");
+
         var random = new StableRandom(seed);
         var regionSkins = new CellSkin[5];
         for (int region = 0; region < regionSkins.Length; region++)
@@ -109,6 +117,7 @@ internal static class CompositeMapPatch
         }
 
         var eligibleByRegion = new List<int>[5];
+        int[] regionStarts = FiveRealmsLayoutRules.RegionStarts(cellCount);
         for (int region = 0; region < eligibleByRegion.Length; region++)
         {
             eligibleByRegion[region] = new List<int>();
@@ -123,24 +132,19 @@ internal static class CompositeMapPatch
                 continue;
             }
 
-            int region = Math.Min(4, index * 5 / cellCount);
-            data._cellSkin = regionSkins[region];
+            int region = 0;
+            while (region < FiveRealmsLayoutRules.RegionCount - 1 && index >= regionStarts[region + 1]) region++;
+            data._cellSkin = data._cellType == CellType.RogueTrap ? CellSkin.Fantasy : regionSkins[region];
             if (index != 0 && data._cellType == CellType.City)
             {
                 eligibleByRegion[region].Add(index);
             }
         }
 
-        int trapsPlaced = 0;
-        for (int region = 0; region < eligibleByRegion.Length; region++)
+        int[] trapCells = FiveRealmsLayoutRules.SelectTrapCells(eligibleByRegion,
+            seed ^ 0x9E3779B9u, existingTraps);
+        foreach (int cellIndex in trapCells)
         {
-            List<int> candidates = eligibleByRegion[region];
-            if (candidates.Count == 0)
-            {
-                continue;
-            }
-
-            int cellIndex = candidates[random.Next(candidates.Count)];
             CellData data = map._cellsArray[cellIndex]._cellData;
             data._cellType = CellType.RogueTrap;
             // RogueTrap's native card/prefab belongs to Fantasy. Retaining a
@@ -149,11 +153,10 @@ internal static class CompositeMapPatch
             data._trapSettings = new TrapSettings(
                 Math.Max(1, Plugin.TrapDurationTurns.Value),
                 (uint)Math.Max(0, Plugin.TrapReleaseCost.Value));
-            trapsPlaced++;
         }
 
         Plugin.ModLog.LogInfo(
-            $"Generated Five Realms seed=0x{seed:X8}, cells={cellCount}, traps={trapsPlaced}, " +
+            $"Generated Five Realms seed=0x{seed:X8}, cells={cellCount}, traps={existingTraps + trapCells.Length}/2, " +
             $"skins={string.Join("/", regionSkins)}.");
     }
 

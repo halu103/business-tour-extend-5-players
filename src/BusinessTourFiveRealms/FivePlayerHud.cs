@@ -13,7 +13,7 @@ namespace BusinessTourFiveRealms;
 internal static class FivePlayerHud
 {
     private const string ColumnName = "FiveRealmsCompactPlayerColumn";
-    private const string FifthPanelName = "FiveRealmsGameplayPlayer5";
+    private const string ToolbarName = "FiveRealmsGameplayToolbar";
     private static readonly Dictionary<IntPtr, LayoutState> Layouts = new();
     private static readonly Dictionary<IntPtr, InventoryState> Inventories = new();
     private static readonly Dictionary<IntPtr, BackgroundState> Backgrounds = new();
@@ -66,8 +66,6 @@ internal static class FivePlayerHud
             return;
         }
 
-        GameObject clone = null;
-        GameObject column = null;
         LayoutState state = null;
         try
         {
@@ -88,36 +86,38 @@ internal static class FivePlayerHud
             }
 
             state = new LayoutState(current, hud._placesOfPlayers);
+            // Extract the actual global controls before cloning any subtree.
+            // A prefab variant can nest them inside the left player's root;
+            // cloning first would leave five unbound copies of those controls.
+            PrepareToolbar(hud, state);
             var views = new Il2CppReferenceArray<PlayerView>(ModState.FivePlayers);
             var anchors = new Il2CppReferenceArray<Transform>(ModState.FivePlayers);
-            for (int index = 0; index < current.Length; index++)
+            int sourceIndex = FindLeftPanel(current);
+            Transform source = FindSinglePlayerAnchor(hud, current[sourceIndex], sourceIndex);
+            LogTemplateOwnership(current[sourceIndex]);
+            for (int index = 0; index < ModState.FivePlayers; index++)
             {
-                views[index] = current[index];
-                anchors[index] = FindSinglePlayerAnchor(hud, current[index], index);
-            }
-
-            if (current.Length < ModState.FivePlayers)
-            {
-                int sourceIndex = FindLeftPanel(current);
-                Transform source = anchors[sourceIndex];
-                // Clone only the player-owned subtree. A corner container may
-                // also own zoom, pause and basket controls even when it has
-                // exactly one PlayerView; cloning/moving it duplicates those.
-                clone = UnityEngine.Object.Instantiate(source.gameObject);
-                state.Clone = clone;
-                clone.name = FifthPanelName;
+                // The four vanilla panels are four different corner layouts,
+                // not interchangeable cards. Use one complete native left-hand
+                // template for every seat before any real controller is bound.
+                // Its timer, dice targets, avatar and additional elements remain
+                // native; no player information is painted by the mod.
+                GameObject clone = UnityEngine.Object.Instantiate(source.gameObject);
+                state.Clones.Add(clone);
+                clone.name = $"FiveRealmsGameplayPlayer{index + 1}";
                 clone.transform.SetParent(source.parent, false);
-                PlayerView fifth = clone.GetComponentInChildren<PlayerView>(true);
-                if (fifth == null)
+                PlayerView panel = clone.GetComponent<PlayerView>();
+                if (panel == null)
                 {
-                    throw new InvalidOperationException("The cloned gameplay slot has no PlayerView component.");
+                    throw new InvalidOperationException("The cloned gameplay card has no PlayerView component.");
                 }
-                fifth.PlayerId = string.Empty;
-                views[ModState.FivePlayers - 1] = fifth;
-                anchors[ModState.FivePlayers - 1] = clone.transform;
+                panel.PlayerId = string.Empty;
+                panel._playerViewPositionType = PlayerViewPositionType.TopLeft;
+                views[index] = panel;
+                anchors[index] = clone.transform;
             }
 
-            column = new GameObject(ColumnName);
+            GameObject column = new GameObject(ColumnName);
             state.Column = column;
             RectTransform columnRect = column.AddComponent<RectTransform>();
             columnRect.SetParent(hud.transform, false);
@@ -127,21 +127,27 @@ internal static class FivePlayerHud
             columnRect.offsetMax = Vector2.zero;
             columnRect.localScale = Vector3.one;
 
+            for (int index = 0; index < current.Length; index++)
+            {
+                Rect originalFrame = GetFrameBounds(current[index], columnRect);
+                Plugin.ModLog.LogInfo($"HUD original slot {index}: {current[index].PlayerViewPositionType}, frame=({originalFrame.xMin:F0},{originalFrame.yMin:F0},{originalFrame.width:F0},{originalFrame.height:F0}).");
+            }
+
             float canvasHeight = columnRect.rect.height;
             if (canvasHeight < 100f)
             {
                 canvasHeight = 1080f;
             }
+            float canvasWidth = columnRect.rect.width;
+            if (canvasWidth < 100f) canvasWidth = 1920f;
             float rowHeight = canvasHeight * 0.14f;
-            float topMargin = canvasHeight * 0.13f;
-            float largestHeight = 0f;
-            for (int index = 0; index < anchors.Length; index++)
-            {
-                RectTransform viewRect = views[index].transform.TryCast<RectTransform>();
-                float height = viewRect == null ? 220f : viewRect.rect.height;
-                largestHeight = Mathf.Max(largestHeight, height);
-            }
-            float scale = Mathf.Min(0.62f, (rowHeight - 12f) / Mathf.Max(220f, largestHeight));
+            float topMargin = canvasHeight * 0.12f;
+            Rect frame = GetFrameBounds(views[0], columnRect);
+            // Reserve no more than 18% of the viewport for all player UI. Use
+            // visible frame dimensions, since native parent rects can span the
+            // whole screen and would otherwise make text unreadably small.
+            float scale = Mathf.Min(0.65f, canvasWidth * 0.145f / Mathf.Max(1f, frame.width));
+            scale = Mathf.Min(scale, (rowHeight - 32f) / Mathf.Max(1f, frame.height));
             scale = Mathf.Max(0.25f, scale);
 
             for (int index = 0; index < anchors.Length; index++)
@@ -168,6 +174,14 @@ internal static class FivePlayerHud
                 views[index]._playerViewPositionType = PlayerViewPositionType.TopLeft;
             }
 
+            for (int index = 0; index < current.Length; index++)
+            {
+                // Keep the vanilla serialized views untouched and available
+                // for the next four-player game. The native factory will only
+                // bind and Show the replacement array below.
+                current[index].gameObject.SetActive(false);
+            }
+
             // Native InitializePlayers constructs real controllers, subscribes
             // money/turn/state events and sets native avatar providers for every
             // view here, including the fifth. No dummy avatar is inserted.
@@ -179,18 +193,13 @@ internal static class FivePlayerHud
             state.RowHeight = rowHeight;
             Layouts.Add(hud.Pointer, state);
             Reflow(hud);
-            Plugin.ModLog.LogInfo($"Gameplay HUD prepared {views.Length} native player views in a compact left column (scale={scale:F2}, row={rowHeight:F0}).");
+            Plugin.ModLog.LogInfo($"Gameplay HUD prepared {views.Length} matching native left-hand cards and a separate toolbar (scale={scale:F2}, row={rowHeight:F0}).");
         }
         catch (Exception ex)
         {
             if (state != null)
             {
                 state.Restore(hud);
-            }
-            else
-            {
-                if (clone != null) UnityEngine.Object.Destroy(clone);
-                if (column != null) UnityEngine.Object.Destroy(column);
             }
             Plugin.ModLog.LogWarning($"Five-player gameplay HUD initialization failed safely: {ex}");
         }
@@ -211,18 +220,13 @@ internal static class FivePlayerHud
                 // The native four prefabs have different corner-relative child
                 // offsets. Position by actual visible frame bounds, not their
                 // full-screen parent pivots, retaining native controllers.
-                float left = float.PositiveInfinity;
-                float top = float.NegativeInfinity;
-                IncludeBounds(view.border?.transform, column, ref left, ref top);
-                IncludeBounds(view.backgroundColor?.transform, column, ref left, ref top);
-                IncludeBounds(view._avatarPlaceholder, column, ref left, ref top);
-                IncludeBounds(view._playerName?.transform, column, ref left, ref top);
-                IncludeBounds(view._moneyField?.transform, column, ref left, ref top);
-                if (float.IsInfinity(left) || float.IsInfinity(top)) continue;
-                Vector3 delta = new Vector3(column.rect.xMin + 18f - left,
-                    column.rect.yMax - state.TopMargin - state.RowHeight * index - top, 0f);
+                Rect frame = GetFrameBounds(view, column);
+                if (frame.width <= 0f || frame.height <= 0f) continue;
+                Vector3 delta = new Vector3(column.rect.xMin + 18f - frame.xMin,
+                    column.rect.yMax - state.TopMargin - state.RowHeight * index - frame.yMax, 0f);
                 anchor.position += column.TransformVector(delta);
             }
+            ReflowToolbar(state, column);
         }
         catch (Exception ex)
         {
@@ -230,7 +234,21 @@ internal static class FivePlayerHud
         }
     }
 
-    private static void IncludeBounds(Transform transform, RectTransform column, ref float left, ref float top)
+    private static Rect GetFrameBounds(PlayerView view, RectTransform column)
+    {
+        float left = float.PositiveInfinity, top = float.NegativeInfinity;
+        float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
+        IncludeBounds(view.border?.transform, column, ref left, ref top, ref right, ref bottom);
+        IncludeBounds(view.backgroundColor?.transform, column, ref left, ref top, ref right, ref bottom);
+        IncludeBounds(view._avatarPlaceholder, column, ref left, ref top, ref right, ref bottom);
+        IncludeBounds(view._playerName?.transform, column, ref left, ref top, ref right, ref bottom);
+        IncludeBounds(view._moneyField?.transform, column, ref left, ref top, ref right, ref bottom);
+        return float.IsInfinity(left) || float.IsInfinity(top) ? default :
+            new Rect(left, bottom, right - left, top - bottom);
+    }
+
+    private static void IncludeBounds(Transform transform, RectTransform column,
+        ref float left, ref float top, ref float right, ref float bottom)
     {
         RectTransform rect = transform == null ? null : transform.TryCast<RectTransform>();
         if (rect == null) return;
@@ -242,7 +260,112 @@ internal static class FivePlayerHud
                 (corner & 2) == 0 ? bounds.yMin : bounds.yMax, 0f)));
             left = Mathf.Min(left, local.x);
             top = Mathf.Max(top, local.y);
+            right = Mathf.Max(right, local.x);
+            bottom = Mathf.Min(bottom, local.y);
         }
+    }
+
+    private static void PrepareToolbar(UIGameHUD hud, LayoutState state)
+    {
+        state.Toolbar = new GameObject(ToolbarName);
+        RectTransform toolbar = state.Toolbar.AddComponent<RectTransform>();
+        toolbar.SetParent(hud.transform, false);
+        toolbar.anchorMin = Vector2.zero;
+        toolbar.anchorMax = Vector2.one;
+        toolbar.offsetMin = Vector2.zero;
+        toolbar.offsetMax = Vector2.zero;
+        toolbar.localScale = Vector3.one;
+
+        // Move the actual serialized controls, preserving their event bindings.
+        // In particular never move or clone a whole corner container: those
+        // containers also contain the player's money and avatar destinations.
+        AddToolbarControl(state, hud._pauseButton?.transform,
+            hud._pauseButton?.targetGraphic?.transform ?? hud._pauseButton?.transform, toolbar);
+        AddToolbarControl(state, hud._zoomButton?.transform,
+            hud._zoomButton?.targetGraphic?.transform ?? hud._zoomButton?.transform, toolbar);
+        AddToolbarControl(state, hud._smilesButton?.transform,
+            hud._smilesButton?.targetGraphic?.transform ?? hud._smilesButton?.transform, toolbar);
+        AddToolbarControl(state, hud._goldStoreOpen?.transform,
+            hud._goldStoreOpen?.targetGraphic?.transform ?? hud._goldStoreOpen?.transform, toolbar);
+        if (hud.BasketView != null)
+            AddToolbarControl(state, hud.BasketView.transform, hud.BasketView._basketButton?.transform, toolbar);
+        AttachToolbarHint(state, hud._smilesHint, hud._smilesButton?.transform);
+        AttachToolbarHint(state, hud._goldStoreHint, hud._goldStoreOpen?.transform);
+    }
+
+    private static void AttachToolbarHint(LayoutState state, GameObject hint, Transform button)
+    {
+        if (hint == null || button == null || hint.transform.IsChildOf(button)) return;
+        state.Save(hint.transform);
+        hint.transform.SetParent(button, false);
+        RectTransform rect = hint.transform.TryCast<RectTransform>();
+        if (rect != null)
+        {
+            rect.anchorMin = new Vector2(0.5f, 0.5f);
+            rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, -52f);
+        }
+        else hint.transform.localPosition = new Vector3(0f, -52f, 0f);
+    }
+
+    private static void AddToolbarControl(LayoutState state, Transform root, Transform bounds,
+        RectTransform toolbar)
+    {
+        if (root == null || bounds == null) return;
+        foreach (ToolbarControl control in state.Controls)
+            if (control.Root.Pointer == root.Pointer) return;
+        bool playerOwned = false;
+        foreach (PlayerView player in state.Views)
+            if (player != null && IsOwned(player.transform, root)) playerOwned = true;
+        RectTransform sourceRect = root.TryCast<RectTransform>();
+        RectTransform graphicRect = bounds.TryCast<RectTransform>();
+        Plugin.ModLog.LogInfo($"HUD toolbar control {root.name}: parent={root.parent?.name}, nestedUnderPlayer={playerOwned}, active={root.gameObject.activeSelf}/{root.gameObject.activeInHierarchy}, rootSize={sourceRect?.rect.size}, graphic={bounds.name}, graphicSize={graphicRect?.rect.size}.");
+        state.Save(root);
+        root.SetParent(toolbar, false);
+        if (sourceRect != null && sourceRect.rect.width < 1f && sourceRect.rect.height < 1f &&
+            bounds.Pointer == root.Pointer)
+        {
+            // Native Buttons uses a layout group to size these zero-sized
+            // Image/Button rects. Reparenting removes that driver; supply a
+            // concrete clickable icon size instead of leaving a zero mesh.
+            sourceRect.anchorMin = sourceRect.anchorMax = new Vector2(0.5f, 0.5f);
+            sourceRect.sizeDelta = new Vector2(64f, 64f);
+        }
+        if (!bounds.IsChildOf(root) && bounds.Pointer != root.Pointer)
+        {
+            // Some native button variants serialize their visible graphic as
+            // a sibling. Keep the real graphic with its real event target.
+            state.Save(bounds);
+            bounds.SetParent(root, true);
+        }
+        // Bound the native icon itself rather than a full-screen parent rect.
+        RectTransform rect = bounds.TryCast<RectTransform>();
+        float edge = rect == null ? 64f : Mathf.Max(rect.rect.width, rect.rect.height);
+        float scale = Mathf.Min(1f, 64f / Mathf.Max(1f, edge));
+        Vector3 original = root.localScale;
+        root.localScale = new Vector3(original.x * scale, original.y * scale, original.z);
+        state.Controls.Add(new ToolbarControl(root, bounds));
+    }
+
+    private static void ReflowToolbar(LayoutState state, RectTransform column)
+    {
+        for (int index = 0; index < state.Controls.Count; index++)
+        {
+            ToolbarControl control = state.Controls[index];
+            float left = float.PositiveInfinity, top = float.NegativeInfinity;
+            float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
+            IncludeBounds(control.Bounds, column, ref left, ref top, ref right, ref bottom);
+            if (float.IsInfinity(right) || float.IsInfinity(top)) continue;
+            // Pause is the rightmost action; preserve room beneath the toolbar
+            // for the board instead of stacking icons above the local avatar.
+            Vector3 delta = new Vector3(column.rect.xMax - 24f - index * 80f - right,
+                column.rect.yMax - 28f - top, 0f);
+            control.Root.position += column.TransformVector(delta);
+            if (!state.ToolbarLogged)
+                Plugin.ModLog.LogInfo($"HUD toolbar fitted {control.Root.name}: active={control.Root.gameObject.activeSelf}/{control.Root.gameObject.activeInHierarchy}, graphicActive={control.Bounds.gameObject.activeSelf}/{control.Bounds.gameObject.activeInHierarchy}, size={right-left:F1}x{top-bottom:F1}, scale={control.Root.localScale.x:F3}.");
+        }
+        state.ToolbarLogged = true;
     }
 
     internal static void Release(UIGameHUD hud)
@@ -433,8 +556,8 @@ internal static class FivePlayerHud
                 }
                 state.Save(money[index]);
                 state.Save(cards[index].transform);
-                PositionWorldRow(money[index], index, 0.16f);
-                PositionWorldRow(cards[index].transform, index, 0.20f);
+                PositionWorldRow(money[index], index, 0.168f);
+                PositionWorldRow(cards[index].transform, index, 0.164f);
             }
 
             var groups = state.Ownership;
@@ -467,7 +590,7 @@ internal static class FivePlayerHud
                         }
                         state.Save(indicators[playerIndex].transform);
                         PositionWorldRow(indicators[playerIndex].transform, playerIndex,
-                            0.23f + groupIndex * 0.018f);
+                            Mathf.Min(0.184f, 0.175f + groupIndex * 0.003f));
                     }
                     expandedGroups[groupIndex] = new CellsOwnshipIndicator.InitParams
                     {
@@ -508,6 +631,21 @@ internal static class FivePlayerHud
             {
                 Plugin.ModLog.LogInfo($"Gameplay inventory initialized native money for all {initialized} actual players.");
             }
+            if (Inventories.TryGetValue(controller._view.Pointer, out InventoryState state))
+            {
+                // Money amount and transfer animations still run through the
+                // original IMoneyInventory objects. Only their decorative GAF
+                // roots are smaller; the native HUD text remains full-sized.
+                if (controller._view._playerMoney != null)
+                    foreach (IMoneyInventory money in controller._view._playerMoney.Values)
+                        state.CompactMoney(money);
+                if (controller._view._playerMovingMoney != null)
+                    foreach (IMoneyInventory money in controller._view._playerMovingMoney.Values)
+                        state.CompactMoney(money);
+                if (controller._view._movingMoneyCollection != null)
+                    foreach (IMoneyInventory money in controller._view._movingMoneyCollection.Values)
+                        state.CompactMoney(money);
+            }
         }
         catch (Exception ex)
         {
@@ -530,7 +668,7 @@ internal static class FivePlayerHud
             {
                 containers[index] = index < current.Length ? current[index] : fifthContainer;
                 state.Save(containers[index]);
-                PositionWorldRow(containers[index], index, 0.16f);
+                PositionWorldRow(containers[index], index, 0.168f);
             }
             background._inventoryContainers = containers;
             Backgrounds.Add(background.Pointer, state);
@@ -587,27 +725,39 @@ internal static class FivePlayerHud
     private static bool IsOwned(Transform root, Transform child) =>
         child == null || child.Pointer == root.Pointer || child.IsChildOf(root);
 
+    private static void LogTemplateOwnership(PlayerView view)
+    {
+        Transform root = view.transform;
+        Plugin.ModLog.LogInfo($"HUD left-template ownership: sideRow={IsOwned(root, view._sideRow)}, keysPosition={IsOwned(root, view._sideRowWithKeysPosition)}, noKeysPosition={IsOwned(root, view._sideRowNoKeysPosition)}, smileTarget={IsOwned(root, view._throwSmileTarget)}, smileContainer={IsOwned(root, view._throwSmileContainer)}, hintDefault={IsOwned(root, view._defaultBubbleParent)}, hintShifted={IsOwned(root, view._shiftedBubbleParent)}, turnPrediction={IsOwned(root, view._turnPredictionView?.transform)}.");
+    }
+
     private sealed class LayoutState
     {
         internal readonly Il2CppReferenceArray<PlayerView> Views;
         internal readonly Il2CppReferenceArray<Transform> Places;
         private readonly PlayerViewPositionType[] _positionTypes;
+        private readonly bool[] _active;
         internal readonly List<TransformState> Transforms = new();
-        internal GameObject Clone;
+        internal readonly List<GameObject> Clones = new();
+        internal readonly List<ToolbarControl> Controls = new();
         internal GameObject Column;
+        internal GameObject Toolbar;
         internal Il2CppReferenceArray<PlayerView> ExpandedViews;
         internal Il2CppReferenceArray<Transform> Anchors;
         internal float TopMargin;
         internal float RowHeight;
+        internal bool ToolbarLogged;
 
         internal LayoutState(Il2CppReferenceArray<PlayerView> views, Il2CppReferenceArray<Transform> places)
         {
             Views = views;
             Places = places;
             _positionTypes = new PlayerViewPositionType[views.Length];
+            _active = new bool[views.Length];
             for (int index = 0; index < views.Length; index++)
             {
                 _positionTypes[index] = views[index].PlayerViewPositionType;
+                _active[index] = views[index].gameObject.activeSelf;
             }
         }
 
@@ -620,17 +770,39 @@ internal static class FivePlayerHud
                 try { transform.Restore(); }
                 catch (Exception ex) { Plugin.ModLog.LogDebug($"HUD transform already released: {ex.Message}"); }
             }
-            hud._sortedPlayersView = Views;
-            hud._placesOfPlayers = Places;
+            try
+            {
+                hud._sortedPlayersView = Views;
+                hud._placesOfPlayers = Places;
+            }
+            catch (Exception ex) { Plugin.ModLog.LogDebug($"HUD arrays already released: {ex.Message}"); }
             for (int index = 0; index < Views.Length; index++)
             {
-                if (Views[index] != null)
+                try
                 {
-                    Views[index]._playerViewPositionType = _positionTypes[index];
+                    if (Views[index] != null)
+                    {
+                        Views[index]._playerViewPositionType = _positionTypes[index];
+                        Views[index].gameObject.SetActive(_active[index]);
+                    }
                 }
+                catch (Exception ex) { Plugin.ModLog.LogDebug($"Original player view already released: {ex.Message}"); }
             }
-            if (Clone != null) UnityEngine.Object.Destroy(Clone);
+            foreach (GameObject clone in Clones)
+                if (clone != null) UnityEngine.Object.Destroy(clone);
+            if (Toolbar != null) UnityEngine.Object.Destroy(Toolbar);
             if (Column != null) UnityEngine.Object.Destroy(Column);
+        }
+    }
+
+    private sealed class ToolbarControl
+    {
+        internal readonly Transform Root;
+        internal readonly Transform Bounds;
+        internal ToolbarControl(Transform root, Transform bounds)
+        {
+            Root = root;
+            Bounds = bounds;
         }
     }
 
@@ -645,6 +817,7 @@ internal static class FivePlayerHud
         private readonly Vector2 _anchorMax;
         private readonly Vector2 _pivot;
         private readonly Vector2 _anchoredPosition;
+        private readonly Vector2 _sizeDelta;
 
         internal TransformState(Transform transform)
         {
@@ -660,6 +833,7 @@ internal static class FivePlayerHud
                 _anchorMax = rect.anchorMax;
                 _pivot = rect.pivot;
                 _anchoredPosition = rect.anchoredPosition;
+                _sizeDelta = rect.sizeDelta;
             }
         }
 
@@ -676,6 +850,7 @@ internal static class FivePlayerHud
                 rect.anchorMax = _anchorMax;
                 rect.pivot = _pivot;
                 rect.anchoredPosition = _anchoredPosition;
+                rect.sizeDelta = _sizeDelta;
             }
             else
             {
@@ -724,8 +899,18 @@ internal static class FivePlayerHud
         internal Il2CppReferenceArray<Transform> Money;
         internal Il2CppReferenceArray<CardInventory> Cards;
         internal Il2CppReferenceArray<CellsOwnshipIndicator.InitParams> Ownership;
+        private readonly HashSet<IntPtr> _compactMoney = new();
 
         internal InventoryState(UIGameInventory view) => _view = view;
+
+        internal void CompactMoney(IMoneyInventory money)
+        {
+            GameObject root = money?.GameObject;
+            if (root == null || !_compactMoney.Add(root.Pointer)) return;
+            Save(root.transform);
+            Vector3 scale = root.transform.localScale;
+            root.transform.localScale = new Vector3(scale.x * 0.32f, scale.y * 0.32f, scale.z);
+        }
 
         internal void Restore()
         {

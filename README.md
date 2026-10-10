@@ -1,29 +1,32 @@
 # Business Tour — Five Realms
 
-Mod thử nghiệm cho **Business Tour - Online Multiplayer Board Game** (Steam app `397900`, Unity IL2CPP).
+Mod thử nghiệm **0.2.0** cho **Business Tour - Online Multiplayer Board Game** (Steam app `397900`, Unity IL2CPP).
 
 ## Có gì trong bản này
 
 - Giữ kết nối Photon khi game chạy nền và ngăn bộ đếm AFK mặc định đá người chơi sau 3 lượt bị bỏ qua bắt buộc.
 - Thêm map chọn riêng: **Five Realms — 5 Players**.
 - Chỉ map Five Realms mới chuyển giới hạn phòng sang 5 người. Các map gốc vẫn giữ 4 người.
-- Five Realms chia vòng 32 ô thành 5 khu vực có giao diện ngẫu nhiên, đồng bộ bằng seed lấy từ tên phòng, và đặt một bẫy Rogue Trap trong mỗi khu vực khi có ô phù hợp.
+- Five Realms chia vòng 32 ô thành 5 khu vực có giao diện ngẫu nhiên, đồng bộ bằng seed lấy từ tên phòng, và đặt **tối đa 2 ô Rogue Trap trên cả map**, ở hai khu vực khác nhau khi đủ ô phù hợp. Bẫy có sẵn của map nền cũng được tính vào giới hạn này.
 - Khi vào trận, riêng map này đổi vòng ô vuông thành **ngũ giác nhọn dạng kim cương với 5 đỉnh thật**; mỗi đỉnh mở đầu một cạnh/khu vực. Luật di chuyển vẫn dùng thứ tự cell gốc để giữ đồng bộ mạng.
 - Mở rộng các mảng slot lobby/versus từ 4 lên 5 khi map Five Realms đang hoạt động.
 
 ## Giới hạn cần nói rõ
 
-Đây là mod client cho game online, không phải thay đổi máy chủ của Business Tour. Nó đã được khóa theo Steam build `24336877` / Unity `6000.0.58f2`, nhưng không thể bảo đảm backend hiện tại cho phép người thứ 5 trước khi thử thật với 5 tài khoản. Tất cả người trong phòng Five Realms phải cài cùng phiên bản mod; client vanilla không hiểu dấu nhận dạng map và có thể không vào được phòng.
+Đây là mod client cho game online, không phải thay đổi máy chủ của Business Tour. Nó đã được khóa theo Steam build `25392206` / Unity `6000.0.58f2`, nhưng không thể bảo đảm backend hiện tại cho phép người thứ 5 trước khi thử thật với 5 tài khoản. Tất cả người trong phòng Five Realms phải cài cùng phiên bản mod; client vanilla không hiểu dấu nhận dạng map và có thể không vào được phòng. Không trộn bản 0.1.0 và 0.2.0 trong cùng phòng vì thuật toán sinh bẫy đã đổi.
 
 Game hiện chỉ khai báo ba họ giao diện ô (`Classic`, `Fantasy`, `Wonderland`). Vì vậy năm khu vực được xáo trộn từ ba họ này và có thể lặp, không phải năm bộ asset hoàn toàn độc lập. Hình học hiển thị được chuyển thành ngũ giác, nhưng graph luật chơi vẫn là vòng 32 ô gốc; đây là chủ ý để client không gửi một loại đường đi mới mà server không hiểu.
 
 Không dùng map này cho xếp hạng, giải đấu hoặc phòng cược cho tới khi đã test đủ. Bản vá không thể chống việc máy chủ chủ động đóng phòng, bảo trì hoặc kick quản trị; nó chỉ xử lý AFK phía client và heartbeat khi chạy nền.
 
+Luật mua đất, di chuyển, tiền, lượt, bẫy và giới hạn 4 người của map gốc không được sửa. Riêng bản vá chống AFK/kết nối nền đã yêu cầu trước đó vẫn áp dụng cho game; có thể tắt `PreventAfkTurnKick` trong cấu hình nếu muốn hành vi AFK gốc.
+
 ## Trạng thái kiểm thử hiện tại
 
-- Đã kiểm tra trực tiếp qua Steam: BepInEx và plugin nạp thành công, map được chèn vào collection gốc, game đi tới main menu và UI tiếp tục phản hồi mà không có exception.
+- Đã kiểm tra trực tiếp qua Steam ở bản trước: chọn map Five Realms, thêm đủ 4 bot cùng người chơi vào trận, có đủ 5 bảng tiền và 5 quân trên bàn. Chỉ có một tài khoản thật; không phải kiểm thử 5 tài khoản độc lập.
+- Quy tắc tối đa 2 bẫy được kiểm tra bằng cùng mã dùng trong game qua 30.000 trường hợp seed, gồm bẫy có sẵn, khu vực rỗng và đồng bộ lựa chọn.
 - Đã kiểm tra bộ cài mới, cài đè/nâng cấp và trình gỡ trên bản sao game cách ly; plugin khác và phần BepInEx dùng chung được giữ lại.
-- Chưa gọi bản này là ổn định: vẫn cần mở màn chọn map, chạy một trận thật và kiểm tra với 5 tài khoản độc lập. Log khởi động không thể chứng minh backend chấp nhận người chơi thứ 5.
+- Bản 0.2.0 đang được kiểm tra lại hình học/HUD và chuyển 5 → 4 → 5; chưa gọi là ổn định. Log khởi động không thể chứng minh backend chấp nhận người chơi thứ 5.
 
 Lần mở đầu sau khi cài có thể lâu hơn bình thường vì BepInEx phải tạo cache IL2CPP. Nếu màn hình vẫn trống quá lâu sau khi tiêu đề cửa sổ đã trở lại `BusinessTour`, hãy đóng game và lấy `BepInEx\LogOutput.log` để chẩn đoán; không nên chờ vô hạn.
 
@@ -54,4 +57,3 @@ Script build tạo DLL, kiểm tra hash game, đóng gói loader + plugin, rồi
 - Alt-Tab lâu hơn thời gian từng gây rớt; thử ba lượt timeout liên tiếp.
 - Host rời/reconnect và chuyển host.
 - Chọn lại map gốc, xác nhận phòng quay về tối đa 4 người.
-

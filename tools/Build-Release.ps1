@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.1.0'
+    [string]$Version = '0.2.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -137,6 +137,13 @@ Assert-CompatibleGame $GameRoot
 Assert-Hash $bepInExZip $compat.bepInExPackageSha256
 if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) { throw "Portable .NET SDK is missing: $dotnet" }
 if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw "64-bit .NET Framework compiler is missing: $csc" }
+
+# Test the exact pure generation policy compiled into the mod before clearing
+# or replacing any existing release outputs.
+& $dotnet run --project (Join-Path $projectRoot 'tests\LayoutRules\LayoutRules.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Two-trap generation regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\BoardGeometry\BoardGeometry.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Canonical board geometry regression failed.' }
 
 Reset-WorkspaceDirectory $workRoot
 Reset-WorkspaceDirectory $outputRoot
@@ -281,4 +288,3 @@ Compress-Archive -Path (Join-Path $outputRoot '*') -DestinationPath $releaseZip 
 
 Write-Host "Release ready: $releaseZip"
 Write-Host "Embedded payload SHA-256: $payloadSha"
-

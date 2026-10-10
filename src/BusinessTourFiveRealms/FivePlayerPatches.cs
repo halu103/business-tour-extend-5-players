@@ -192,7 +192,7 @@ internal static class NoBetLobbyCapacityPatch
 
 internal static class RoomCapacityRegistry
 {
-    private static readonly List<RoomPlayersSettings> Instances = new List<RoomPlayersSettings>();
+    private static readonly List<CapacityState> Instances = new();
 
     internal static void Register(RoomPlayersSettings settings)
     {
@@ -201,10 +201,10 @@ internal static class RoomCapacityRegistry
             return;
         }
 
-        bool known = false;
+        CapacityState state = null;
         for (int index = Instances.Count - 1; index >= 0; index--)
         {
-            RoomPlayersSettings existing = Instances[index];
+            RoomPlayersSettings existing = Instances[index].Settings;
             if (existing == null || existing.Pointer == IntPtr.Zero)
             {
                 Instances.RemoveAt(index);
@@ -213,26 +213,25 @@ internal static class RoomCapacityRegistry
 
             if (existing.Pointer == settings.Pointer)
             {
-                known = true;
+                state = Instances[index];
             }
         }
 
-        if (!known)
+        if (state == null)
         {
-            Instances.Add(settings);
+            if (settings._roomPlayersInfos == null) return;
+            state = new CapacityState(settings, ModState.IsSpecialMapActive);
+            Instances.Add(state);
         }
-        if (ModState.IsSpecialMapActive)
-        {
-            Resize(settings, ModState.FivePlayers);
-        }
+        state.Apply(ModState.IsSpecialMapActive);
     }
 
     internal static void Apply(bool fivePlayerMode)
     {
-        int targetSize = fivePlayerMode ? ModState.FivePlayers : ModState.VanillaPlayers;
         for (int index = Instances.Count - 1; index >= 0; index--)
         {
-            RoomPlayersSettings settings = Instances[index];
+            CapacityState state = Instances[index];
+            RoomPlayersSettings settings = state.Settings;
             try
             {
                 if (settings == null || settings.Pointer == IntPtr.Zero)
@@ -241,7 +240,7 @@ internal static class RoomCapacityRegistry
                     continue;
                 }
 
-                Resize(settings, targetSize);
+                state.Apply(fivePlayerMode);
             }
             catch (Exception ex)
             {
@@ -252,33 +251,69 @@ internal static class RoomCapacityRegistry
         }
     }
 
-    private static void Resize(RoomPlayersSettings settings, int targetSize)
+    private sealed class CapacityState
     {
-        Il2CppReferenceArray<IRoomPlayerInfo> current = settings._roomPlayersInfos;
-        if (current == null || current.Length == targetSize)
+        internal readonly RoomPlayersSettings Settings;
+        private Il2CppReferenceArray<IRoomPlayerInfo> _original;
+        private Il2CppReferenceArray<IRoomPlayerInfo> _expanded;
+
+        internal CapacityState(RoomPlayersSettings settings, bool active)
         {
-            return;
+            Settings = settings;
+            CaptureOriginal(settings._roomPlayersInfos, active);
         }
 
-        if (targetSize < current.Length)
+        private void CaptureOriginal(Il2CppReferenceArray<IRoomPlayerInfo> current, bool active)
         {
-            for (int index = targetSize; index < current.Length; index++)
+            // Startup can legitimately construct a new special-map room with
+            // five slots before this first access. Its ordinary-map baseline
+            // is four. Existing 1v1/two-slot objects retain their exact two-slot
+            // array instead of being restored to a blanket global four.
+            int originalSize = active && current.Length == ModState.FivePlayers
+                ? ModState.VanillaPlayers : current.Length;
+            _original = current.Length == originalSize ? current :
+                new Il2CppReferenceArray<IRoomPlayerInfo>(originalSize);
+            if (_original.Pointer != current.Pointer) Copy(current, _original);
+            _expanded = active && current.Length == ModState.FivePlayers ? current : null;
+        }
+
+        internal void Apply(bool active)
+        {
+            var current = Settings._roomPlayersInfos;
+            if (current == null) return;
+            if (current.Pointer != _original.Pointer && current.Pointer != _expanded?.Pointer)
             {
-                if (current[index] != null)
+                // A native reinitialization may replace the backing array on a
+                // reused settings object. Capture that new generation, never
+                // copy an older room's array back into it.
+                CaptureOriginal(current, active);
+            }
+            int targetSize = active && _original.Length <= ModState.VanillaPlayers
+                ? ModState.FivePlayers : _original.Length;
+            if (current.Length == targetSize &&
+                (active || current.Pointer == _original.Pointer)) return;
+            if (targetSize < current.Length)
+            {
+                for (int index = targetSize; index < current.Length; index++)
                 {
-                    Plugin.ModLog.LogWarning("Kept five internal player slots because slot 5 is occupied.");
+                    if (current[index] == null) continue;
+                    Plugin.ModLog.LogWarning($"Kept {current.Length} internal player slots because slot {index + 1} is occupied.");
                     return;
                 }
             }
+
+            var resized = active ? new Il2CppReferenceArray<IRoomPlayerInfo>(targetSize) : _original;
+            Copy(current, resized);
+            Settings._roomPlayersInfos = resized;
+            if (active) _expanded = resized;
+            Plugin.ModLog.LogDebug($"Internal room slots resized {current.Length} -> {targetSize} (original={_original.Length}).");
         }
 
-        var resized = new Il2CppReferenceArray<IRoomPlayerInfo>(targetSize);
-        int copyCount = Math.Min(current.Length, targetSize);
-        for (int index = 0; index < copyCount; index++)
+        private static void Copy(Il2CppReferenceArray<IRoomPlayerInfo> source,
+            Il2CppReferenceArray<IRoomPlayerInfo> target)
         {
-            resized[index] = current[index];
+            int copyCount = Math.Min(source.Length, target.Length);
+            for (int index = 0; index < copyCount; index++) target[index] = source[index];
         }
-        settings._roomPlayersInfos = resized;
-        Plugin.ModLog.LogDebug($"Internal room slots resized {current.Length} -> {targetSize}.");
     }
 }

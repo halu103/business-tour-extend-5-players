@@ -132,7 +132,9 @@ internal static class ModState
         else
         {
             PentagonalSpriteGeometry.Reset();
+            FifthPawnPlacement.Restore();
             CompositeMapPatch.Reset();
+            FivePlayerPaymentUi.Reset();
         }
         Plugin.ModLog.LogInfo($"Five-player map mode {(active ? "enabled" : "disabled")} ({source}).");
     }

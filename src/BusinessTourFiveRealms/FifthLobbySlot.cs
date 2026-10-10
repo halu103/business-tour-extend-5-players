@@ -30,6 +30,7 @@ public sealed class FifthLobbySlotUpdater : MonoBehaviour
         // Native loading-card animations write the old four-seat transforms
         // after ShowPlayers. Fit only our active five-seat views after them.
         SlotExpander.ReflowActiveVersus();
+        FivePlayerHud.ReflowPauseActive();
     }
 
     public void Update()
@@ -50,6 +51,7 @@ public sealed class FifthLobbySlotUpdater : MonoBehaviour
         }
         _nextCheck = Time.unscaledTime + 0.5f;
         FifthLobbySlot.Tick();
+        FivePlayerPaymentUi.Tick();
     }
 }
 

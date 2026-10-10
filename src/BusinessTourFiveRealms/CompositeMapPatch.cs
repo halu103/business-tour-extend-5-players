@@ -146,7 +146,11 @@ internal static class CompositeMapPatch
         foreach (int cellIndex in trapCells)
         {
             CellData data = map._cellsArray[cellIndex]._cellData;
-            data._cellType = CellType.RogueTrap;
+            // Use the native type transition rather than changing just the
+            // enum. In 2.21 this also assigns Service/NoBuilding, so an
+            // unbuyable trap is not left inside its former city monopoly suit.
+            // CellId, LineId and next-cell links are preserved by this method.
+            data.SetCellType(CellType.RogueTrap);
             // RogueTrap's native card/prefab belongs to Fantasy. Retaining a
             // Wonderland region skin asks its deck for a card it does not own.
             data._cellSkin = CellSkin.Fantasy;

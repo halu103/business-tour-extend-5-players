@@ -18,6 +18,7 @@ public sealed class Plugin : BasePlugin
     public const string Guid = "vn.businesstour.fiverealms";
     public const string Name = "Business Tour Five Realms";
     public const string Version = "0.2.0";
+    public const string ReleaseVersion = "0.2.0-preview.2";
 
     internal static ManualLogSource ModLog { get; private set; } = null!;
     internal static ConfigEntry<bool> PreventAfkKick { get; private set; } = null!;
@@ -30,7 +31,7 @@ public sealed class Plugin : BasePlugin
     {
         ModLog = Log;
 #if BT5_DIAGNOSTIC_NOOP
-        Log.LogInfo($"{Name} {Version} diagnostic no-op loaded; no game APIs or Harmony patches were touched.");
+        Log.LogInfo($"{Name} {ReleaseVersion} diagnostic no-op loaded; no game APIs or Harmony patches were touched.");
         return;
 #else
         PreventAfkKick = Config.Bind("Connection", "PreventAfkTurnKick", true,
@@ -47,7 +48,7 @@ public sealed class Plugin : BasePlugin
         ApplyConnectionSettings();
 
 #if BT5_DIAGNOSTIC_CONNECTION_ONLY
-        Log.LogInfo($"{Name} {Version} connection-only diagnostic loaded; Harmony patches were not installed.");
+        Log.LogInfo($"{Name} {ReleaseVersion} connection-only diagnostic loaded; Harmony patches were not installed.");
         return;
 #else
 
@@ -62,7 +63,7 @@ public sealed class Plugin : BasePlugin
         // through Map Editor -> Bot Test without owning Business Tour Club.
         ModState.SetSpecialMap(true, "diagnostic forced mode");
 #endif
-        Log.LogInfo($"{Name} {Version} loaded. Vanilla maps remain 4-player; {ModState.DisplayName} activates 5-player mode.");
+        Log.LogInfo($"{Name} {ReleaseVersion} loaded. Vanilla maps remain 4-player; {ModState.DisplayName} activates 5-player mode.");
 #endif
 #endif
     }

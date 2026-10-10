@@ -52,7 +52,9 @@ internal static class CanonicalBoardPresentation
             var geometry = CanonicalBoardGeometry.Create(
                 new NVector2(reference.Center.x, reference.Center.y), radiusX * 1.13f,
                 radiusY * 1.13f, cells.Count, Math.Sign(cross));
-            prepared = new BoardState(map, geometry, reference.PlaneXY);
+            float depth=0f;
+            foreach(Vector3 point in centers) depth+=(reference.PlaneXY?point.z:point.y)/centers.Length;
+            prepared = new BoardState(map, geometry, reference.PlaneXY, depth);
             for (int index = 0; index < cells.Count; index++)
             {
                 Vector2 tangent = reference.Source[(index + 1) % cells.Count] -
@@ -90,14 +92,14 @@ internal static class CanonicalBoardPresentation
     internal static void SyncAll()
     {
         if (_current == null) return;
-        foreach (TileState tile in _current.Tiles) tile.Sync();
+        foreach (TileState tile in _current.Tiles) tile.Sync(_current.LabelCamera);
     }
 
     internal static void Sync(CellRenderer renderer)
     {
         if (_current == null || renderer?._renderer == null) return;
         foreach (TileState tile in _current.Tiles)
-            if (tile.Renderer.Pointer == renderer._renderer.Pointer) { tile.Sync(); return; }
+            if (tile.Renderer.Pointer == renderer._renderer.Pointer) { tile.Sync(_current.LabelCamera); return; }
     }
 
     internal static void ReplaceBackground(GameView view)
@@ -118,15 +120,17 @@ internal static class CanonicalBoardPresentation
         internal readonly MapView Map;
         internal readonly CanonicalBoardGeometry Geometry;
         internal readonly bool PlaneXY;
+        private readonly float _planeDepth;
         internal readonly List<TileState> Tiles = new();
         private readonly List<Surface> _surfaces = new();
         private readonly Dictionary<IntPtr, (SpriteRenderer Renderer, bool ForceOff)> _hidden = new();
         private Camera _camera;
         private Vector3 _cameraPosition;
         private float _cameraSize;
+        internal Camera LabelCamera=>_camera ?? Camera.main;
 
-        internal BoardState(MapView map, CanonicalBoardGeometry geometry, bool planeXY)
-        { Map = map; Geometry = geometry; PlaneXY = planeXY; }
+        internal BoardState(MapView map, CanonicalBoardGeometry geometry, bool planeXY, float planeDepth)
+        { Map = map; Geometry = geometry; PlaneXY = planeXY; _planeDepth=planeDepth; }
 
         internal bool Matches(MapView map, List<CellView> cells)
         {
@@ -136,7 +140,7 @@ internal static class CanonicalBoardPresentation
             return true;
         }
 
-        internal Vector3 Point(NVector2 point) => PlaneXY ? new Vector3(point.X, point.Y, 0f) : new Vector3(point.X, 0f, point.Y);
+        internal Vector3 Point(NVector2 point) => PlaneXY ? new Vector3(point.X, point.Y, _planeDepth) : new Vector3(point.X, _planeDepth, point.Y);
 
         internal void CreateBase()
         {
@@ -155,6 +159,26 @@ internal static class CanonicalBoardPresentation
             _surfaces.Add(Surface.Solid(parent, source, down, new Color(0.40f, 0.34f, 0.29f, 1f), order-4));
             _surfaces.Add(Surface.Solid(parent, source, outer, new Color(0.85f, 0.84f, 0.79f, 1f), order-3));
             _surfaces.Add(Surface.Solid(parent, source, inner, new Color(0.63f, 0.72f, 0.38f, 1f), order-2));
+            // The inner field has its own five-sided park ring, independent of
+            // the square bitmap's baked road. Leave the playable faces outside.
+            for(int edge=0;edge<Geometry.InnerCorners.Count;edge++)
+            {
+                NVector2 start=Geometry.InnerCorners[edge]-Geometry.Center;
+                NVector2 end=Geometry.InnerCorners[(edge+1)%Geometry.InnerCorners.Count]-Geometry.Center;
+                var road=new[]{Point(Geometry.Center+start*0.985f),Point(Geometry.Center+end*0.985f),
+                    Point(Geometry.Center+end*0.895f),Point(Geometry.Center+start*0.895f)};
+                _surfaces.Add(Surface.Solid(parent,source,road,new Color(0.47f,0.50f,0.49f,1f),order-1));
+                var grass=new[]{Point(Geometry.Center),Point(Geometry.Center+start*0.875f),Point(Geometry.Center+end*0.875f)};
+                _surfaces.Add(Surface.Solid(parent,source,grass,edge%2==0?new Color(0.67f,0.76f,0.41f,1f):new Color(0.65f,0.74f,0.40f,1f),order-1));
+                for(int dash=0;dash<7;dash++)
+                {
+                    float from=(dash+0.27f)/7f,to=(dash+0.60f)/7f;
+                    NVector2 a=NVector2.Lerp(start,end,from),b=NVector2.Lerp(start,end,to);
+                    var stripe=new[]{Point(Geometry.Center+a*0.945f),Point(Geometry.Center+b*0.945f),
+                        Point(Geometry.Center+b*0.936f),Point(Geometry.Center+a*0.936f)};
+                    _surfaces.Add(Surface.Solid(parent,source,stripe,new Color(0.87f,0.88f,0.82f,1f),order));
+                }
+            }
         }
 
         internal void Fit(Camera camera)
@@ -172,6 +196,7 @@ internal static class CanonicalBoardPresentation
             camera.transform.position += camera.transform.right * ((left+right)*0.5f-0.17f*size*camera.aspect) +
                 camera.transform.up * ((bottom+top)*0.5f+0.04f*size);
             camera.orthographicSize=size;
+            foreach(TileState tile in Tiles) tile.FitLabel(camera);
         }
 
         internal void HideBackground(LocationBackground background)
@@ -200,6 +225,7 @@ internal static class CanonicalBoardPresentation
         internal void Restore()
         {
             foreach (TileState tile in Tiles) try { tile.Restore(); } catch(Exception ex) { Plugin.ModLog.LogDebug(ex.Message); }
+            try { Map.SortCellsByOrder(); } catch { }
             foreach(Surface surface in _surfaces) surface.Dispose();
             foreach(var entry in _hidden.Values) try { if(entry.Renderer!=null)entry.Renderer.forceRenderingOff=entry.ForceOff; } catch { }
             try { if(_camera!=null){_camera.transform.position=_cameraPosition;_camera.orthographicSize=_cameraSize;} } catch { }
@@ -219,6 +245,7 @@ internal static class CanonicalBoardPresentation
         private readonly int[] _renderIndices;
         private readonly Vector3 _center;
         private readonly bool _planeXY;
+        private readonly float _planeDepth;
         private readonly bool _forceOff;
         private readonly Il2CppStructArray<Vector3> _corners;
         private readonly Il2CppReferenceArray<Transform> _slots;
@@ -237,6 +264,8 @@ internal static class CanonicalBoardPresentation
         private IntPtr _sprite;
         private IntPtr _nativeMaterial;
         private bool _flipX, _flipY;
+        private readonly BoardLabelPresentation _label;
+        private readonly BoardLabelPresentation _rentLabel;
 
         internal TileState(CellView cell,Vector3[] face,Vector2 boardCenter,Vector2 tangent,
             CanonicalBoardCell target,bool planeXY)
@@ -246,6 +275,7 @@ internal static class CanonicalBoardPresentation
             _rootPosition=cell.transform.position; _press=cell._pressCellStartPosition;
             _sourceMatrix=Renderer.transform.localToWorldMatrix; _forceOff=Renderer.forceRenderingOff;
             _planeXY=planeXY; _corners=cell._cornersArray; _slots=cell._slots;
+            foreach(Vector3 point in face) _planeDepth+=(planeXY?point.z:point.y)/face.Length;
             _points=cell._iconVisualPositions; _orders=cell.IconVisualOrders;
             _nativeFreePlaces=cell.FreePlaces; _collider=cell._collider2D;
             if (_slots == null || _points == null || _orders == null ||
@@ -268,14 +298,16 @@ internal static class CanonicalBoardPresentation
             for(int index=0;index<4;index++)
             {
                 _renderQuad[index]=_targetQuad[_renderIndices[index]];
-                SampleUv(Renderer.sprite,_sourceQuad[index]);
             }
+            ProjectSprite(Renderer.sprite);
             FaceCoordinates(face[0]);
             _center=World(target.Center);
+            _label=new BoardLabelPresentation(cell._labelView,_targetQuad,planeXY,_planeDepth);
+            _rentLabel=new BoardLabelPresentation(cell._rentView,_targetQuad,planeXY,_planeDepth,.7f,1f);
         }
         internal bool Matches(CellView cell)=>_cell.Pointer==cell.Pointer &&
             _cell._cellRenderer?._renderer?.Pointer==Renderer.Pointer;
-        private Vector3 World(NVector2 point)=>_planeXY?new Vector3(point.X,point.Y,0f):new Vector3(point.X,0f,point.Y);
+        private Vector3 World(NVector2 point)=>_planeXY?new Vector3(point.X,point.Y,_planeDepth):new Vector3(point.X,_planeDepth,point.Y);
         private Vector2 Planar(Vector3 point)=>new(point.x,_planeXY?point.y:point.z);
 
         private static Vector3[] OrderFace(Vector3[] face,Vector2 center,Vector2 tangent,bool xy)
@@ -339,42 +371,49 @@ internal static class CanonicalBoardPresentation
             return new Vector2((p.x*y.y-p.y*y.x)/determinant,(x.x*p.y-x.y*p.x)/determinant);
         }
 
-        internal void Sync()
+        internal void FitLabel(Camera camera)
+        {
+            _label?.Fit(camera);
+            _rentLabel?.Fit(camera);
+        }
+
+        internal void Sync(Camera camera=null)
         {
             if(Renderer==null)return;
             Sprite sprite=Renderer.sprite;
             if(sprite==null)return;
             IntPtr material = Renderer.sharedMaterial?.Pointer ?? IntPtr.Zero;
-            if(_ground==null || _sprite!=sprite.Pointer || _nativeMaterial!=material || _flipX!=Renderer.flipX || _flipY!=Renderer.flipY)
+            if(_sprite!=sprite.Pointer || _nativeMaterial!=material || _flipX!=Renderer.flipX || _flipY!=Renderer.flipY)
             {
-                var uv=new Vector2[4];
-                for(int index=0;index<4;index++)uv[index]=SampleUv(sprite,_sourceQuad[_renderIndices[index]]);
-                Surface replacement=Surface.Textured(_cell.transform,Renderer,_renderQuad,uv);
+                CanonicalTileMesh mesh=ProjectSprite(sprite);
+                Surface replacement=mesh.IsEmpty?null:Surface.Textured(_cell.transform,Renderer,mesh,World);
                 _ground?.Dispose(); _ground=replacement;
+                if(mesh.IsEmpty)Plugin.ModLog.LogWarning($"Cell {_cell.name}, sprite {sprite.name}: no top artwork coverage; showing the tile bed only.");
                 _sprite=sprite.Pointer;_nativeMaterial=material;_flipX=Renderer.flipX;_flipY=Renderer.flipY;
             }
-            _ground.Sync(Renderer); _bed.SyncOrder(Renderer.sortingOrder-1);
+            _ground?.Sync(Renderer); _bed.SyncOrder(Renderer.sortingOrder-1);
             Renderer.forceRenderingOff=true;
+            FitLabel(camera ?? Camera.main);
         }
 
-        private Vector2 SampleUv(Sprite sprite,Vector3 point)
+        private CanonicalTileMesh ProjectSprite(Sprite sprite)
         {
             var vertices=sprite.vertices;var uv=sprite.uv;var triangles=sprite.triangles;
-            Vector2 p=Planar(point);float best=float.NegativeInfinity;Vector2 result=Vector2.zero;
-            for(int index=0;index+2<triangles.Length;index+=3)
+            var source=new NVector2[4];var target=new NVector2[4];
+            for(int index=0;index<4;index++)
             {
-                int ia=triangles[index],ib=triangles[index+1],ic=triangles[index+2];
-                Vector2 a=SpritePoint(vertices[ia]),b=SpritePoint(vertices[ib]),c=SpritePoint(vertices[ic]);
-                Vector2 x=b-a,y=c-a,q=p-a;float d=x.x*y.y-x.y*y.x;
-                if(Mathf.Abs(d)<0.000001f)continue;
-                float v=(q.x*y.y-q.y*y.x)/d,w=(x.x*q.y-x.y*q.x)/d,u=1f-v-w;
-                float score=Mathf.Min(u,Mathf.Min(v,w));
-                if(score>best){best=score;result=uv[ia]*u+uv[ib]*v+uv[ic]*w;}
+                Vector2 a=Planar(_sourceQuad[index]),b=Planar(_targetQuad[index]);
+                source[index]=new NVector2(a.x,a.y);target[index]=new NVector2(b.x,b.y);
             }
-            if(float.IsNegativeInfinity(best))throw new InvalidOperationException("No usable native sprite UV triangles.");
-            if(best < -0.025f)
-                throw new InvalidOperationException($"Cell {_cell.name}, sprite {sprite.name}: logical top corner outside native texture coverage (score={best:F4}, point={point}).");
-            return result;
+            var positions=new NVector2[vertices.Length];var texture=new NVector2[uv.Length];
+            for(int index=0;index<vertices.Length;index++)
+            {
+                Vector2 point=SpritePoint(vertices[index]);positions[index]=new NVector2(point.x,point.y);
+            }
+            for(int index=0;index<uv.Length;index++)texture[index]=new NVector2(uv[index].x,uv[index].y);
+            var indices=new int[triangles.Length];for(int index=0;index<triangles.Length;index++)indices[index]=triangles[index];
+            try{return CanonicalTileProjection.Project(source,target,positions,texture,indices);}
+            catch(Exception ex){throw new InvalidOperationException($"Native tile {_cell.name}, sprite {sprite.name} cannot be safely projected.",ex);}
         }
         private Vector2 SpritePoint(Vector2 point)
         {
@@ -385,15 +424,23 @@ internal static class CanonicalBoardPresentation
         internal void Restore()
         {
             _ground?.Dispose();_bed?.Dispose();
-            if(_cell==null)return;
-            _cell.transform.position=_rootPosition;_cell._pressCellStartPosition=_press;
-            _cell._cornersArray=_corners;_cell._slots=_slots;_cell._iconVisualPositions=_points;_cell.IconVisualOrders=_orders;
-            for(int index=0;index<_pointValues.Length;index++)_points[index]=_pointValues[index];
-            for(int index=0;index<_slotPositions.Count;index++)_slots[index].position=_slotPositions[index];
-            if(_nativeFreePlaces!=null){_nativeFreePlaces.Clear();foreach(int place in _freePlaces)_nativeFreePlaces.Add(place);}
-            if(_collider!=null){_collider.pathCount=_colliderPaths.Count;for(int path=0;path<_colliderPaths.Count;path++)_collider.SetPath(path,_colliderPaths[path]);}
-            if(Renderer!=null)Renderer.forceRenderingOff=_forceOff;
-            if(_extra!=null)UnityEngine.Object.Destroy(_extra.gameObject);
+            try
+            {
+                if(_cell==null)return;
+                _label?.Restore();
+                _rentLabel?.Restore();
+                _cell.transform.position=_rootPosition;_cell._pressCellStartPosition=_press;
+                _cell._cornersArray=_corners;_cell._slots=_slots;_cell._iconVisualPositions=_points;_cell.IconVisualOrders=_orders;
+                for(int index=0;index<_pointValues.Length;index++)_points[index]=_pointValues[index];
+                for(int index=0;index<_slotPositions.Count;index++)_slots[index].position=_slotPositions[index];
+                if(_nativeFreePlaces!=null){_nativeFreePlaces.Clear();foreach(int place in _freePlaces)_nativeFreePlaces.Add(place);}
+                if(_collider!=null){_collider.pathCount=_colliderPaths.Count;for(int path=0;path<_colliderPaths.Count;path++)_collider.SetPath(path,_colliderPaths[path]);}
+            }
+            finally
+            {
+                try { if(Renderer!=null)Renderer.forceRenderingOff=_forceOff; } catch { }
+                try { if(_extra!=null)UnityEngine.Object.Destroy(_extra.gameObject); } catch { }
+            }
         }
     }
 
@@ -404,12 +451,16 @@ internal static class CanonicalBoardPresentation
         private readonly Mesh _mesh;
         private readonly Material _material;
         private readonly MaterialPropertyBlock _properties=new();
-        private Surface(Transform parent,SpriteRenderer native,IReadOnlyList<Vector3> points,Vector2[] uv,Color color,int order,Texture texture, bool nativeMaterial=false)
+        private Surface(Transform parent,SpriteRenderer native,IReadOnlyList<Vector3> points,Vector2[] uv,Color color,int order,Texture texture, bool nativeMaterial=false,int[] meshTriangles=null)
         {
             _holder=new GameObject("FiveRealmsCanonicalSurface");_holder.layer=native.gameObject.layer;
             _holder.transform.SetParent(parent,false);
             var vertices=new Vector3[points.Count];for(int index=0;index<points.Count;index++)vertices[index]=_holder.transform.InverseTransformPoint(points[index]);
-            var triangles=new int[(points.Count-2)*3];for(int face=0;face<points.Count-2;face++){triangles[face*3]=0;triangles[face*3+1]=face+1;triangles[face*3+2]=face+2;}
+            int[] triangles=meshTriangles;
+            if(triangles==null)
+            {
+                triangles=new int[(points.Count-2)*3];for(int face=0;face<points.Count-2;face++){triangles[face*3]=0;triangles[face*3+1]=face+1;triangles[face*3+2]=face+2;}
+            }
             _mesh=new Mesh{name="FiveRealmsCanonicalTile"};_mesh.vertices=new Il2CppStructArray<Vector3>(vertices);
             _mesh.uv=new Il2CppStructArray<Vector2>(uv??new Vector2[points.Count]);
             var colors=new Color[points.Count];for(int index=0;index<colors.Length;index++)colors[index]=color;
@@ -427,7 +478,13 @@ internal static class CanonicalBoardPresentation
             _renderer.shadowCastingMode=UnityEngine.Rendering.ShadowCastingMode.Off;_renderer.receiveShadows=false;
         }
         internal static Surface Solid(Transform parent,SpriteRenderer native,IReadOnlyList<Vector3> points,Color color,int order)=>new(parent,native,points,null,color,order,Texture2D.whiteTexture);
-        internal static Surface Textured(Transform parent,SpriteRenderer native,Vector3[] points,Vector2[] uv)=>new(parent,native,points,uv,Color.white,native.sortingOrder,native.sprite.texture,true);
+        internal static Surface Textured(Transform parent,SpriteRenderer native,CanonicalTileMesh mesh,Func<NVector2,Vector3> world)
+        {
+            var points=new Vector3[mesh.Positions.Count];var uv=new Vector2[mesh.UV.Count];var triangles=new int[mesh.Triangles.Count];
+            for(int index=0;index<points.Length;index++){points[index]=world(mesh.Positions[index]);uv[index]=new Vector2(mesh.UV[index].X,mesh.UV[index].Y);}
+            for(int index=0;index<triangles.Length;index++)triangles[index]=mesh.Triangles[index];
+            return new(parent,native,points,uv,Color.white,native.sortingOrder,native.sprite.texture,true,triangles);
+        }
         internal void SyncOrder(int order){if(_renderer!=null)_renderer.sortingOrder=order;}
         internal void Sync(SpriteRenderer native)
         {

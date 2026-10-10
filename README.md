@@ -1,59 +1,64 @@
 # Business Tour — Five Realms
 
-Mod thử nghiệm **0.2.0** cho **Business Tour - Online Multiplayer Board Game** (Steam app `397900`, Unity IL2CPP).
+**0.2.0-preview.2 — experimental pre-release** for Business Tour - Online Multiplayer Board Game (Steam app `397900`, Unity IL2CPP).
 
-## Có gì trong bản này
+This is a test build, not a stable release. Use a private, no-bet room with bots first. Do not use it in ranked games, tournaments or paid rooms.
 
-- Giữ kết nối Photon khi game chạy nền và ngăn bộ đếm AFK mặc định đá người chơi sau 3 lượt bị bỏ qua bắt buộc.
-- Thêm map chọn riêng: **Five Realms — 5 Players**.
-- Chỉ map Five Realms mới chuyển giới hạn phòng sang 5 người. Các map gốc vẫn giữ 4 người.
-- Five Realms chia vòng 32 ô thành 5 khu vực có giao diện ngẫu nhiên, đồng bộ bằng seed lấy từ tên phòng, và đặt **tối đa 2 ô Rogue Trap trên cả map**, ở hai khu vực khác nhau khi đủ ô phù hợp. Bẫy có sẵn của map nền cũng được tính vào giới hạn này.
-- Khi vào trận, riêng map này đổi vòng ô vuông thành **ngũ giác nhọn dạng kim cương với 5 đỉnh thật**; mỗi đỉnh mở đầu một cạnh/khu vực. Luật di chuyển vẫn dùng thứ tự cell gốc để giữ đồng bộ mạng.
-- Mở rộng các mảng slot lobby/versus từ 4 lên 5 khi map Five Realms đang hoạt động.
+## Included in this preview
 
-## Giới hạn cần nói rõ
+- A selectable **Five Realms — 5 Players** map. Only this map requests a five-player room; original maps retain their native four-player limit.
+- Five native player cards in a compact left-hand rail, a matching five-card Pause screen, and visible native toolbar buttons.
+- A pointed, isometric pentagon with shared tile boundaries and a uniform base, replacing the earlier distorted square-prefab outline.
+- Five seeded visual regions drawn from the game's three native cell-skin families: `Classic`, `Fantasy` and `Wonderland`. Repeated families are expected.
+- At most **two generated/static Rogue Trap cells** in total, including any traps already present in the base map. Generated traps use different regions when suitable cells exist.
+- A correction for loading-screen names being covered by portraits. This latest correction has compiled but has not yet been verified in a live game.
+- Native purchase/repurchase/escape dialogs enlarged up to 15%, capped to fit the viewport without replacing native buttons or their animations.
+- Rent/debt captions and money amounts given a 15% font-size ceiling with safe autosizing. Tightly bounded labels may retain their native size; the full-screen sale-selection view is not enlarged.
+- Native tile names aligned with the camera and fitted inside their own tile. Names and rent text use separate inner/outer bands. The math is tested; the new live appearance is not yet verified and long names can become small.
+- Trap type transitions normalized to native Service/NoBuilding metadata instead of leaving a trap in its former city's suit.
+- Background connection settings and an attempted client-side AFK fix. **AFK protection is not reliable in this preview:** the latest bot test still exited after three missed rolls with `PreventAfkTurnKick=true`.
 
-Đây là mod client cho game online, không phải thay đổi máy chủ của Business Tour. Nó đã được khóa theo Steam build `25392206` / Unity `6000.0.58f2`, nhưng không thể bảo đảm backend hiện tại cho phép người thứ 5 trước khi thử thật với 5 tài khoản. Tất cả người trong phòng Five Realms phải cài cùng phiên bản mod; client vanilla không hiểu dấu nhận dạng map và có thể không vào được phòng. Không trộn bản 0.1.0 và 0.2.0 trong cùng phòng vì thuật toán sinh bẫy đã đổi.
+The map still uses the native **32-cell route** and native movement, purchase, money and turn rules. It does **not** yet expand four resorts/beaches to five or rebalance all player-count-dependent rules. The agreed next topology is **40 cells: five sides of eight**, preserving the original 32 cells. That expansion is not enabled in this preview. A pentagonal appearance and a fifth player do not, by themselves, implement a complete five-player ruleset.
 
-Game hiện chỉ khai báo ba họ giao diện ô (`Classic`, `Fantasy`, `Wonderland`). Vì vậy năm khu vực được xáo trộn từ ba họ này và có thể lặp, không phải năm bộ asset hoàn toàn độc lập. Hình học hiển thị được chuyển thành ngũ giác, nhưng graph luật chơi vẫn là vòng 32 ô gốc; đây là chủ ý để client không gửi một loại đường đi mới mà server không hiểu.
+## Installation
 
-Không dùng map này cho xếp hạng, giải đấu hoặc phòng cược cho tới khi đã test đủ. Bản vá không thể chống việc máy chủ chủ động đóng phòng, bảo trì hoặc kick quản trị; nó chỉ xử lý AFK phía client và heartbeat khi chạy nền.
+1. Close Business Tour and any Five Realms setup/uninstall window.
+2. Extract `BusinessTourFiveRealms-0.2.0-preview.2-win-x64.zip`.
+3. Run `BusinessTourFiveRealms-Setup.exe`.
+4. Confirm the detected game folder and choose **Install / Cài**.
+5. Start the game through Steam. Create a private **no-bet** room and select **Five Realms — 5 Players**. For an initial test, add four bots.
 
-Luật mua đất, di chuyển, tiền, lượt, bẫy và giới hạn 4 người của map gốc không được sửa. Riêng bản vá chống AFK/kết nối nền đã yêu cầu trước đó vẫn áp dụng cho game; có thể tắt `PreventAfkTurnKick` trong cấu hình nếu muốn hành vi AFK gốc.
+Install the **same pre-release package** on every participating client. Do not mix vanilla clients, 0.1.0, or different previews in a Five Realms room. The standalone installer follows the project's existing WinForms setup workflow.
 
-## Trạng thái kiểm thử hiện tại
+To remove the mod, close the game and run `BusinessTourFiveRealms-Uninstall.exe`. The uninstaller removes this project's owned plugin files and retains the shared BepInEx loader and unrelated plugins. It does not uninstall the Steam game.
 
-- Đã kiểm tra trực tiếp qua Steam ở bản trước: chọn map Five Realms, thêm đủ 4 bot cùng người chơi vào trận, có đủ 5 bảng tiền và 5 quân trên bàn. Chỉ có một tài khoản thật; không phải kiểm thử 5 tài khoản độc lập.
-- Quy tắc tối đa 2 bẫy được kiểm tra bằng cùng mã dùng trong game qua 30.000 trường hợp seed, gồm bẫy có sẵn, khu vực rỗng và đồng bộ lựa chọn.
-- Đã kiểm tra bộ cài mới, cài đè/nâng cấp và trình gỡ trên bản sao game cách ly; plugin khác và phần BepInEx dùng chung được giữ lại.
-- Bản 0.2.0 đang được kiểm tra lại hình học/HUD và chuyển 5 → 4 → 5; chưa gọi là ổn định. Log khởi động không thể chứng minh backend chấp nhận người chơi thứ 5.
+The first start may take longer while BepInEx generates its IL2CPP cache. If the screen stays blank after the window title returns to `BusinessTour`, close the game and inspect `BepInEx\LogOutput.log` instead of waiting indefinitely. Do not publish logs without checking them for personal data.
 
-Lần mở đầu sau khi cài có thể lâu hơn bình thường vì BepInEx phải tạo cache IL2CPP. Nếu màn hình vẫn trống quá lâu sau khi tiêu đề cửa sổ đã trở lại `BusinessTour`, hãy đóng game và lấy `BepInEx\LogOutput.log` để chẩn đoán; không nên chờ vô hạn.
+## Compatibility and limits
 
-## Cài đặt cho người chơi
+The installer is pinned to Steam build **25392206**, game **2.21**, Unity **6000.0.58f2**, and BepInEx IL2CPP x64 build **788**. It verifies exact game-file hashes and refuses an incompatible installation.
 
-1. Thoát Business Tour trên mọi máy.
-2. Giải nén gói phát hành.
-3. Chạy `BusinessTourFiveRealms-Setup.exe`.
-4. Kiểm tra thư mục game được nhận diện, rồi chọn **Install / Cài**.
-5. Mỗi người chơi cài cùng gói, mở game bình thường qua Steam và chọn map **Five Realms — 5 Players** khi tạo phòng.
+This is a client mod; it does not modify Business Tour's servers. Five independent human accounts, Steam invites, reconnects and host migration have not been verified. Server maintenance, server-side room limits and administrative kicks cannot be prevented by this client patch.
 
-Gỡ bằng `BusinessTourFiveRealms-Uninstall.exe`. Trình gỡ chỉ xóa plugin của dự án; nó giữ BepInEx để không làm hỏng mod khác.
+Original maps are intentionally excluded from the special board/HUD changes. Background/AFK settings are global, as requested earlier. Their configuration is in `BepInEx\config\vn.businesstour.fiverealms.cfg`; disable `PreventAfkTurnKick` to request native AFK behavior, but enabling it is not a guarantee of protection.
 
-## Build
+## Verification status
 
-Yêu cầu bản Business Tour tương thích đã cài và một bản BepInEx IL2CPP x64 trong cache dự án. Chạy:
+- Live Steam test: one human plus four bots entered Five Realms; five player cards and moving pawns were observed.
+- Live Steam test: the canonical pentagon rendered successfully. Pause displayed five matching cards and closed back to gameplay.
+- Automated checks cover trap selection, board geometry, native tile clipping, camera-aligned label footprints and payment-layout sizing. The release build runs these checks and audits native patch targets before packaging.
+- Installer checks run against an isolated copy of compatible game files, not the real Steam folder. They verify the exact packaged DLL/version/hash and preservation of game files, unrelated plugins and the shared loader.
+- **Not complete:** live verification of the newest loading-name/label/payment changes and trap metadata correction, repeated Pause lifecycle, normal-map regression after five-player play, five human clients, long AFK/background sessions and a full game through bankruptcy/endgame.
+
+See [PRE_RELEASE_NOTES.md](PRE_RELEASE_NOTES.md) for known issues and follow-up work. Passing build/installer tests is not evidence that the online five-player mode is stable.
+
+## Building and testing
+
+Requirements: the exact compatible Steam installation, generated BepInEx interop references, and the project's cached BepInEx package and portable .NET SDK.
 
 ```powershell
-pwsh -NoProfile -File .\tools\Build-Release.ps1
+pwsh -NoProfile -File .\tools\Build-Release.ps1 -Version 0.2.0-preview.2
+pwsh -NoProfile -File .\tools\Test-Release.ps1 -Version 0.2.0-preview.2
 ```
 
-Script build tạo DLL, kiểm tra hash game, đóng gói loader + plugin, rồi tạo bộ cài WinForms giống quy trình của Far Far West mod. Thư mục Steam thật không bị ghi trong quá trình build/test.
-
-## Test bắt buộc trước khi gọi là ổn định
-
-- 5 máy cùng build game/mod, vào bằng mã phòng và Steam Invite.
-- Mỗi người hoàn thành ít nhất một lượt; kiểm tra mua đất, bẫy, phá sản, kết thúc game.
-- Alt-Tab lâu hơn thời gian từng gây rớt; thử ba lượt timeout liên tiếp.
-- Host rời/reconnect và chuyển host.
-- Chọn lại map gốc, xác nhận phòng quay về tối đa 4 người.
+Packaging and isolated installer tests do not write into the real Steam installation. Assembly/BepInEx numeric version `0.2.0` is retained for loader compatibility; the DLL informational version, startup message, installer, manifests and archive identify `0.2.0-preview.2`.

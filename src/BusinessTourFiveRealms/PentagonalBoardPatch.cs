@@ -39,8 +39,13 @@ internal static class PentagonalBoardPatch
     private static void Postfix(MapView __instance, ICameraService cameraService)
     {
         if (__instance == null) return;
-        if (!ModState.IsSpecialMapActive) { PentagonalSpriteGeometry.Reset(); return; }
-        CanonicalBoardPresentation.Apply(__instance, cameraService);
+        if (!ModState.IsSpecialMapActive) { PentagonalSpriteGeometry.Reset(); FifthPawnPlacement.Restore(); return; }
+        try
+        {
+            FifthPawnPlacement.Ensure(__instance);
+            CanonicalBoardPresentation.Apply(__instance, cameraService);
+        }
+        catch(Exception ex) { Plugin.ModLog.LogError($"Could not initialize five-player pawn places: {ex}"); }
     }
 
     // Retained only as a diagnostic reference. This deformation is no longer
@@ -950,6 +955,7 @@ internal static class PentagonalBackgroundPatch
 {
     private static void Postfix(GameView __instance)
     {
+        FivePlayerPaymentUi.Observe(__instance);
         try
         {
             if (CanonicalBoardPresentation.IsActive) CanonicalBoardPresentation.ReplaceBackground(__instance);

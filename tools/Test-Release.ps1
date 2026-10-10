@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.0'
+    [string]$Version = '0.2.0-preview.2',
+    [string]$PreviousReleaseZip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,7 @@ $pluginRelative = 'BepInEx\plugins\BusinessTourFiveRealms\BusinessTourFiveRealms
 $modManifestRelative = 'BepInEx\plugins\BusinessTourFiveRealms\mod-manifest.json'
 $builtPlugin = Join-Path $projectRoot 'src\BusinessTourFiveRealms\bin\Release\net6.0\BusinessTourFiveRealms.dll'
 $gameHashes = @{}
+$numericVersion = ($Version -split '-', 2)[0]
 
 function Assert-WorkspaceChild([string]$Path) {
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -36,10 +38,46 @@ function Reset-TestDirectory([string]$Path) {
 }
 
 function Invoke-Checked([string]$File, [string[]]$Arguments) {
-    $process = Start-Process -FilePath $File -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+    $logIndex = [Array]::IndexOf($Arguments, '--log')
+    $diagnosticBase = if ($logIndex -ge 0) { $Arguments[$logIndex + 1] } else { Join-Path $logRoot 'process' }
+    $process = Start-Process -FilePath $File -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden `
+        -RedirectStandardOutput ($diagnosticBase + '.stdout') -RedirectStandardError ($diagnosticBase + '.stderr')
     if ($process.ExitCode -ne 0) {
-        throw "Process failed with exit code $($process.ExitCode): $File $($Arguments -join ' ')"
+        $diagnostic = (Get-Content -LiteralPath ($diagnosticBase + '.stderr') -Raw)
+        throw "Process failed with exit code $($process.ExitCode): $File $($Arguments -join ' ')`n$diagnostic"
     }
+}
+
+function Test-MaintenanceMutexes {
+    $names = @('Local\BusinessTourFiveRealms.Maintenance',
+        'Local\BusinessTourFiveRealms.Setup', 'Local\BusinessTourFiveRealms.Uninstall')
+    $handles = @()
+    try {
+        foreach ($name in $names) { $handles += [System.Threading.Mutex]::new($false, $name) }
+        Invoke-Checked $setup @('--verify-only', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'mutex-free-existing.log'))
+        foreach ($handle in $handles) {
+            if (-not $handle.WaitOne(0)) { throw 'A test mutex is already held by another process.' }
+            try {
+                foreach ($executable in @($setup, $uninstall)) {
+                    $process = Start-Process -FilePath $executable -ArgumentList @('--verify-only', '--game-root', $testRoot) -Wait -PassThru -WindowStyle Hidden
+                    if ($process.ExitCode -ne 4) { throw "Busy mutex did not block $executable (exit=$($process.ExitCode))." }
+                }
+            }
+            finally { $handle.ReleaseMutex() }
+        }
+    }
+    finally { foreach ($handle in $handles) { $handle.Dispose() } }
+
+    if (-not ('FiveRealmsInstallerTests.MutexFixtures' -as [type])) {
+        Add-Type -Path (Join-Path $projectRoot 'tests\InstallerMutex\MutexFixtures.cs')
+    }
+    $handles = @()
+    try {
+        foreach ($name in $names) { $handles += [FiveRealmsInstallerTests.MutexFixtures]::Abandoned($name) }
+        Invoke-Checked $setup @('--verify-only', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'mutex-abandoned.log'))
+    }
+    finally { foreach ($handle in $handles) { $handle.Dispose() } }
+    Write-Host 'Maintenance mutex tests passed: unowned existing, genuine busy (setup + uninstall), abandoned owner.'
 }
 
 function Get-Sha256([string]$Path) {
@@ -94,7 +132,9 @@ function Assert-ManagedInstall([bool]$ExpectedLoaderInstalled, [string]$Stage) {
     }
     Assert-Hash $plugin $expectedPluginHash
     $installedVersion = [System.Reflection.AssemblyName]::GetAssemblyName($plugin).Version.ToString(3)
-    if ($installedVersion -ne $Version) { throw "$Stage DLL assembly version is $installedVersion, expected $Version." }
+    if ($installedVersion -ne $numericVersion) { throw "$Stage DLL assembly version is $installedVersion, expected $numericVersion." }
+    $informationalVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($plugin).ProductVersion
+    if ($informationalVersion -ne $Version) { throw "$Stage DLL informational version is $informationalVersion, expected $Version." }
     $modManifest = Get-Content -LiteralPath (Resolve-TestFile $modManifestRelative) -Raw | ConvertFrom-Json
     if ($modManifest.modId -ne $installed.ModId -or $modManifest.version -ne $Version -or
         $modManifest.playerCount -ne 5 -or $modManifest.mapId -ne 'BT5_FIVE_REALMS_V1') {
@@ -167,6 +207,7 @@ New-Item -Path (Split-Path -Parent $unrelated) -ItemType Directory -Force | Out-
 $unrelatedHash = Get-Sha256 $unrelated
 
 Invoke-Checked $setup @('--verify-only', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-verify.log'))
+Test-MaintenanceMutexes
 Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-install.log'))
 
 $plugin = Join-Path $testRoot 'BepInEx\plugins\BusinessTourFiveRealms\BusinessTourFiveRealms.dll'
@@ -176,7 +217,8 @@ if (-not (Test-Path -LiteralPath $plugin) -or -not (Test-Path -LiteralPath $mark
 }
 Assert-ManagedInstall $true 'Initial installation'
 
-# An upgrade over an exact managed installation must also be safe.
+# A repeat installation of this exact preview must also be safe. This does
+# not claim to test upgrading from an older release.
 Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-upgrade.log'))
 Assert-ManagedInstall $false 'Reinstallation'
 Invoke-Checked $uninstall @('--verify-only', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'uninstall-verify.log'))
@@ -195,5 +237,45 @@ foreach ($file in $expectedManifest.Files) {
     }
 }
 Assert-GamePreserved
+
+# Reproduce the user's uninstall -> reinstall workflow using this same package.
+Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-after-uninstall.log'))
+Assert-ManagedInstall $false 'Installation after uninstall'
+Invoke-Checked $uninstall @('--uninstall', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'uninstall-after-reinstall.log'))
+if (Test-Path -LiteralPath $plugin) { throw 'Second uninstall left the owned plugin DLL behind.' }
+if (Test-Path -LiteralPath $marker) { throw 'Second uninstall left the install marker behind.' }
+Assert-GamePreserved
+
+if (-not [string]::IsNullOrWhiteSpace($PreviousReleaseZip)) {
+    $previousZip = [System.IO.Path]::GetFullPath($PreviousReleaseZip)
+    $previousHash = (Get-Content -LiteralPath ($previousZip + '.sha256') -Raw).Trim()
+    Assert-Hash $previousZip $previousHash
+    $previousRoot = Join-Path $projectRoot 'work\installer-previous-release'
+    Reset-TestDirectory $previousRoot
+    # Release archives are flat. Refuse traversal/nested content before
+    # extracting and executing a checksum-verified previous local artifact.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($previousZip)
+    try {
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName -ne $entry.Name -or $entry.Name -in @('.', '..') -or
+                $entry.Length -gt 100MB) { throw 'Unexpected previous-release archive layout.' }
+        }
+    }
+    finally { $archive.Dispose() }
+    Expand-Archive -LiteralPath $previousZip -DestinationPath $previousRoot
+    $previousSetup = Join-Path $previousRoot 'BusinessTourFiveRealms-Setup.exe'
+    Invoke-Checked $previousSetup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'previous-release-install.log'))
+    $previousMarker = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+    if ($previousMarker.ModVersion -eq $Version) { throw 'Upgrade test requires a different previous version.' }
+    $previousVersion = $previousMarker.ModVersion
+    Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-actual-upgrade.log'))
+    Assert-ManagedInstall $false "Upgrade from $previousVersion"
+    Invoke-Checked $uninstall @('--uninstall', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'uninstall-after-upgrade.log'))
+    if (Test-Path -LiteralPath $plugin) { throw 'Upgrade uninstall left the owned DLL behind.' }
+    if (Test-Path -LiteralPath $marker) { throw 'Upgrade uninstall left the owned marker behind.' }
+    Assert-GamePreserved
+    Write-Host "Actual upgrade $previousVersion -> $Version passed."
+}
 
 Write-Host "Installer $Version exact-payload end-to-end test passed. Logs: $logRoot"

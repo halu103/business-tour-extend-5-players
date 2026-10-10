@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.0'
+    [string]$Version = '0.2.0-preview.2'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +20,9 @@ $pluginDll = Join-Path $projectRoot 'src\BusinessTourFiveRealms\bin\Release\net6
 $bepInExZip = Join-Path $projectRoot ('.tools\bepinex-788\BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.{0}+5b766a3.zip' -f $compat.bepInExBuild)
 $dotnet = Join-Path $projectRoot '.tools\dotnet6\dotnet.exe'
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$versionMatch = [regex]::Match($Version, '^(?<numeric>\d+\.\d+\.\d+)(?:-[0-9A-Za-z.-]+)?$')
+if (-not $versionMatch.Success) { throw 'Use a three-part version with an optional pre-release suffix.' }
+$assemblyVersion = $versionMatch.Groups['numeric'].Value
 
 function Assert-WorkspaceChild([string]$Path) {
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -144,19 +147,28 @@ if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw "64-bit .NET Fram
 if ($LASTEXITCODE -ne 0) { throw 'Two-trap generation regression failed.' }
 & $dotnet run --project (Join-Path $projectRoot 'tests\BoardGeometry\BoardGeometry.csproj') -c Release --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Canonical board geometry regression failed.' }
-
-Reset-WorkspaceDirectory $workRoot
-Reset-WorkspaceDirectory $outputRoot
-New-Item -Path $artifactRoot -ItemType Directory -Force | Out-Null
-New-Item -Path $payloadRoot -ItemType Directory -Force | Out-Null
-New-Item -Path $generatedRoot -ItemType Directory -Force | Out-Null
+& $dotnet run --project (Join-Path $projectRoot 'tests\TileProjection\TileProjection.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Native tile clipping regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\BoardLabels\BoardLabels.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Native label footprint regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\PaymentLayout\PaymentLayout.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Payment UI sizing regression failed.' }
 
 $referenceRoot = Join-Path $GameRoot 'BepInEx'
 if (-not (Test-Path -LiteralPath (Join-Path $referenceRoot 'interop\Assembly-CSharp.dll') -PathType Leaf)) {
     throw 'Open the compatible game with BepInEx once before building; current game interop references are required.'
 }
-& $dotnet build $pluginProject -c Release --nologo ("/p:BepInExRoot={0}" -f $referenceRoot)
+& $dotnet build $pluginProject -c Release --nologo ("/p:BepInExRoot={0}" -f $referenceRoot) ("/p:Version={0}" -f $Version)
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
+$actualAssemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($pluginDll).Version.ToString(3)
+$actualReleaseVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($pluginDll).ProductVersion
+$pluginSourceText = Get-Content -LiteralPath (Join-Path $projectRoot 'src\BusinessTourFiveRealms\Plugin.cs') -Raw
+$pluginVersionMatch = [regex]::Match($pluginSourceText, 'public const string Version\s*=\s*"([^"]+)"')
+$releaseVersionMatch = [regex]::Match($pluginSourceText, 'public const string ReleaseVersion\s*=\s*"([^"]+)"')
+if ($actualAssemblyVersion -ne $assemblyVersion -or $actualReleaseVersion -ne $Version -or
+    $pluginVersionMatch.Groups[1].Value -ne $assemblyVersion -or $releaseVersionMatch.Groups[1].Value -ne $Version) {
+    throw "DLL/plugin/release version mismatch: assembly=$actualAssemblyVersion, release=$actualReleaseVersion, requested=$Version."
+}
 
 # Audit the newly built patch targets against this exact game's native bodies.
 # Unknown targets, unresolved addresses, and unreviewed aliases must stop packaging.
@@ -165,6 +177,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
     -PluginSource (Join-Path $projectRoot 'src\BusinessTourFiveRealms\Plugin.cs') `
     -ModAssembly $pluginDll `
     -FailOnUnsafeAliases
+
+# Keep the previous release intact until compilation, metadata and native-patch
+# checks succeed. Only these validated generated directories are replaced.
+Reset-WorkspaceDirectory $workRoot
+Reset-WorkspaceDirectory $outputRoot
+New-Item -Path $artifactRoot -ItemType Directory -Force | Out-Null
+New-Item -Path $payloadRoot -ItemType Directory -Force | Out-Null
+New-Item -Path $generatedRoot -ItemType Directory -Force | Out-Null
 
 $loaderRoot = Join-Path $workRoot 'loader'
 Expand-Archive -LiteralPath $bepInExZip -DestinationPath $loaderRoot -Force
@@ -175,15 +195,20 @@ New-Item -Path $modRoot -ItemType Directory -Force | Out-Null
 Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $modRoot 'BusinessTourFiveRealms.dll') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $modRoot 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $modRoot 'THIRD_PARTY_NOTICES.md') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'PRE_RELEASE_NOTES.md') -Destination (Join-Path $modRoot 'PRE_RELEASE_NOTES.md') -Force
 
 $modManifest = [ordered]@{
     modId = 'vn.businesstour.fiverealms'
     name = 'Business Tour Five Realms'
     version = $Version
+    channel = if ($Version.Contains('-')) { 'pre-release' } else { 'release' }
     steamAppId = [string]$compat.steamAppId
     steamBuildId = [string]$compat.steamBuildId
     unityVersion = [string]$compat.unityVersion
     playerCount = 5
+    boardCellCount = 32
+    fifthResortImplemented = $false
+    maximumStaticTraps = 2
     mapId = 'BT5_FIVE_REALMS_V1'
     boardShape = 'five-sided-pointed-pentagon'
 }
@@ -272,6 +297,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Uninstaller build failed.' }
 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $outputRoot -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'PRE_RELEASE_NOTES.md') -Destination $outputRoot -Force
 
 $sumLines = @()
 foreach ($file in Get-ChildItem -LiteralPath $outputRoot -File | Sort-Object Name) {

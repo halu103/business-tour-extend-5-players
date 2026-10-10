@@ -94,6 +94,7 @@ internal static class SlotExpander
                 Transform slot = versus._slotParents[index];
                 MasterPlayerPanelView panel = versus.GetPlayerPanel(index);
                 if (slot == null || panel == null) continue;
+                state.FitName(panel);
                 Rect frame = PanelBounds(panel, canvas);
                 if (frame.width <= 0f) continue;
                 float ratio = Mathf.Min(1f, maxPanelWidth / frame.width);
@@ -252,6 +253,7 @@ internal static class SlotExpander
         private readonly Il2CppReferenceArray<Transform> _slots;
         private readonly Il2CppReferenceArray<Transform> _dividers;
         private readonly List<TransformState> _transforms = new();
+        private readonly Dictionary<IntPtr, LoadingNameLayout> _names = new();
         internal Il2CppReferenceArray<Transform> ExpandedSlots;
         internal Il2CppReferenceArray<Transform> ExpandedDividers;
         internal bool LayoutLogged;
@@ -272,6 +274,20 @@ internal static class SlotExpander
                 if (transform != null) _transforms.Add(new TransformState(transform));
         }
 
+        internal void FitName(MasterPlayerPanelView panel)
+        {
+            var label = panel._playerName;
+            RectTransform title = panel._titleBack?.transform.TryCast<RectTransform>();
+            if (label == null || title == null || title.rect.width <= 0f) return;
+            if (!_names.TryGetValue(label.Pointer, out LoadingNameLayout layout))
+            {
+                layout = new LoadingNameLayout(label);
+                _names.Add(label.Pointer, layout);
+                Plugin.ModLog.LogInfo($"Five-player loading name {label.text}: parent={label.transform.parent?.name}, title={title.name}; fitting inside its own title, native text unchanged.");
+            }
+            layout.Fit(title, panel._playerAvatarPlaceHolder);
+        }
+
         internal void Restore()
         {
             // A controller may reuse a view object but replace its serialized
@@ -283,8 +299,12 @@ internal static class SlotExpander
                 View._imageVs = _dividers;
             }
             if (sameGeneration)
+            {
+                foreach (LoadingNameLayout layout in _names.Values)
+                    try { layout.Restore(); } catch (Exception ex) { Plugin.ModLog.LogDebug(ex.Message); }
                 foreach (TransformState state in _transforms)
                     try { state.Restore(); } catch (Exception ex) { Plugin.ModLog.LogDebug(ex.Message); }
+            }
             RemoveExtras(ExpandedSlots, _slots);
             RemoveExtras(ExpandedDividers, _dividers);
         }
@@ -310,6 +330,76 @@ internal static class SlotExpander
                     UnityEngine.Object.Destroy(expanded[index].gameObject);
                 }
                 catch (Exception ex) { Plugin.ModLog.LogDebug(ex.Message); }
+        }
+    }
+
+    private sealed class LoadingNameLayout
+    {
+        private readonly UnityEngine.UI.Text _label;
+        private readonly RectTransform _rect;
+        private readonly Transform _parent;
+        private readonly int _sibling;
+        private readonly Vector2 _min, _max, _pivot, _size, _position;
+        private readonly Vector3 _scale;
+        private readonly Quaternion _rotation;
+        private readonly TextAnchor _alignment;
+        private readonly bool _bestFit;
+        private readonly int _minimum, _maximum;
+        private readonly HorizontalWrapMode _horizontal;
+        private readonly VerticalWrapMode _vertical;
+
+        internal LoadingNameLayout(UnityEngine.UI.Text label)
+        {
+            _label=label; _rect=label.rectTransform; _parent=_rect.parent; _sibling=_rect.GetSiblingIndex();
+            _min=_rect.anchorMin; _max=_rect.anchorMax; _pivot=_rect.pivot;
+            _size=_rect.sizeDelta; _position=_rect.anchoredPosition;
+            _scale=_rect.localScale; _rotation=_rect.localRotation;
+            _alignment=label.alignment; _bestFit=label.resizeTextForBestFit;
+            _minimum=label.resizeTextMinSize; _maximum=label.resizeTextMaxSize;
+            _horizontal=label.horizontalOverflow; _vertical=label.verticalOverflow;
+        }
+
+        internal void Fit(RectTransform title, Transform avatar)
+        {
+            if (_rect.parent?.Pointer != title.Pointer) _rect.SetParent(title, false);
+            _rect.anchorMin=Vector2.zero; _rect.anchorMax=Vector2.one; _rect.pivot=new Vector2(.5f,.5f);
+            // Native title backgrounds extend behind the portrait. Fit the name
+            // into the visible remainder, not into the entire coloured strip.
+            float leftInset=8f;
+            RectTransform portrait=avatar?.TryCast<RectTransform>();
+            if (portrait != null)
+            {
+                var corners=new Il2CppStructArray<Vector3>(4);
+                portrait.GetWorldCorners(corners);
+                float right=float.NegativeInfinity;
+                float top=float.NegativeInfinity, bottom=float.PositiveInfinity;
+                foreach (Vector3 corner in corners)
+                {
+                    Vector3 local=title.InverseTransformPoint(corner);
+                    right=Mathf.Max(right,local.x);
+                    top=Mathf.Max(top,local.y); bottom=Mathf.Min(bottom,local.y);
+                }
+                if (top > title.rect.yMin && bottom < title.rect.yMax)
+                    leftInset=Mathf.Clamp(right-title.rect.xMin+8f,8f,title.rect.width*.6f);
+            }
+            _rect.offsetMin=new Vector2(leftInset,2f); _rect.offsetMax=new Vector2(-8f,-2f);
+            _rect.localScale=Vector3.one; _rect.localRotation=Quaternion.identity;
+            _label.alignment=TextAnchor.MiddleCenter;
+            _label.resizeTextForBestFit=true; _label.resizeTextMinSize=10;
+            _label.resizeTextMaxSize=Math.Max(10,_label.fontSize);
+            _label.horizontalOverflow=HorizontalWrapMode.Wrap; _label.verticalOverflow=VerticalWrapMode.Truncate;
+        }
+
+        internal void Restore()
+        {
+            if (_rect == null || _label == null) return;
+            _rect.SetParent(_parent,false); _rect.SetSiblingIndex(_sibling);
+            _rect.anchorMin=_min; _rect.anchorMax=_max; _rect.pivot=_pivot;
+            _rect.sizeDelta=_size; _rect.anchoredPosition=_position;
+            _rect.localScale=_scale; _rect.localRotation=_rotation;
+            _label.alignment=_alignment; _label.resizeTextForBestFit=_bestFit;
+            _label.resizeTextMinSize=_minimum; _label.resizeTextMaxSize=_maximum;
+            _label.horizontalOverflow=_horizontal; _label.verticalOverflow=_vertical;
         }
     }
 

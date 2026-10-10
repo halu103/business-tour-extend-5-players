@@ -454,9 +454,11 @@ internal static class FivePlayerHud
 
     private static void EnsurePause(PausePlayerPanelsView view, GameplayPlayerPanelFactory factory)
     {
+        if (!ModState.IsSpecialMapActive || view == null || factory == null) return;
         if (Pauses.TryGetValue(view.Pointer, out PauseState existing))
         {
-            factory._playersViews = new Il2CppSystem.Collections.Generic.IList<PlayerView>(existing.Expanded.Pointer);
+            existing.AttachFactory(factory);
+            ReflowPause(existing);
             return;
         }
         var current = view._sortedPlayersViews;
@@ -466,46 +468,59 @@ internal static class FivePlayerHud
         var state = new PauseState(view, current);
         try
         {
+            RectTransform canvas = FindPauseCanvas(view);
+            if (canvas == null)
+                throw new InvalidOperationException("Pause player panels have no full-sized parent canvas.");
             var expanded = new Il2CppReferenceArray<PlayerView>(ModState.FivePlayers);
-            PlayerView fifth = current.Length < ModState.FivePlayers ?
-                state.Clone(current[0].gameObject, "FiveRealmsPausePlayer5").GetComponent<PlayerView>() : current[4];
-            if (fifth == null) throw new InvalidOperationException("Pause slot clone has no PlayerView.");
-            if (current.Length < ModState.FivePlayers) fifth.PlayerId = string.Empty;
+            PlayerView template = FindPauseLeftTemplate(current, canvas);
+            Transform source = FindSinglePlayerAnchor(null, template, 0);
+            if (!IsOwned(source, template._playerViewAdditionalElements?.transform) ||
+                !IsOwned(source, template._sideRow) ||
+                !IsOwned(source, template._dicesSumTarget?.transform) ||
+                !IsOwned(source, template.progressbar?.transform))
+                throw new InvalidOperationException("Pause template has shared player information outside its own root.");
 
-            RectTransform parentRect = view.transform.TryCast<RectTransform>();
-            float width = parentRect == null ? 1400f : parentRect.rect.width;
-            if (width < 500f) width = 1400f;
-            float spacing = width * 0.18f;
+            state.Canvas = canvas;
+            state.Column = new GameObject("FiveRealmsPausePlayerColumn");
+            RectTransform column = state.Column.AddComponent<RectTransform>();
+            column.SetParent(view.transform, false);
+            column.anchorMin = Vector2.zero;
+            column.anchorMax = Vector2.one;
+            column.offsetMin = Vector2.zero;
+            column.offsetMax = Vector2.zero;
+            column.localScale = Vector3.one;
             for (int index = 0; index < expanded.Length; index++)
             {
-                PlayerView panel = index < current.Length ? current[index] : fifth;
-                if (panel == null) throw new InvalidOperationException("Pause has an unassigned player slot.");
+                // Pause, like gameplay, serializes four different corner
+                // layouts. Cloning only seat five leaves alternating avatar
+                // sides and mirrored cards in a single rail. Clone one whole,
+                // unbound left-hand pause card for every native factory seat.
+                PlayerView panel = state.Clone(source.gameObject,
+                    $"FiveRealmsPausePlayer{index + 1}").GetComponent<PlayerView>();
+                if (panel == null) throw new InvalidOperationException("Pause card clone has no PlayerView.");
+                panel.PlayerId = string.Empty;
+                // Pause's native prefabs use Undefined rather than gameplay's
+                // TopLeft. Retain that native contract; visible handedness is
+                // selected from actual frame geometry, not this enum.
+                panel._playerViewPositionType = template.PlayerViewPositionType;
+                Transform root = FindSinglePlayerAnchor(null, panel, index);
                 expanded[index] = panel;
-                state.Save(panel.transform);
-                panel.transform.SetParent(view.transform, false);
-                RectTransform rect = panel.transform.TryCast<RectTransform>();
-                float panelWidth = rect == null ? 300f : rect.rect.width;
-                float scale = Mathf.Clamp((spacing - 12f) / Mathf.Max(300f, panelWidth), 0.25f, 0.70f);
-                if (rect != null)
-                {
-                    rect.anchorMin = new Vector2(0.5f, 0.5f);
-                    rect.anchorMax = new Vector2(0.5f, 0.5f);
-                    rect.pivot = new Vector2(0.5f, 0.5f);
-                    rect.anchoredPosition = new Vector2((index - 2) * spacing, 0f);
-                }
-                else
-                {
-                    panel.transform.localPosition = new Vector3((index - 2) * spacing, 0f, 0f);
-                }
-                Vector3 originalScale = panel.transform.localScale;
-                panel.transform.localScale = new Vector3(originalScale.x * scale, originalScale.y * scale, originalScale.z);
+                state.Save(root);
+                root.SetParent(column, true);
+                state.BaseScales[index] = root.localScale;
             }
 
             state.Expanded = expanded;
+            for (int index = 0; index < current.Length; index++)
+                current[index].gameObject.SetActive(false);
             view._sortedPlayersViews = expanded;
-            factory._playersViews = new Il2CppSystem.Collections.Generic.IList<PlayerView>(expanded.Pointer);
+            // Create returns a deferred native iterator. Replacing this input
+            // before it runs binds each real player once to one replacement
+            // card, including their actual avatar, money and profile action.
+            state.AttachFactory(factory);
             Pauses.Add(view.Pointer, state);
-            Plugin.ModLog.LogInfo("Pause dialog prepared five native player views before native panel creation.");
+            ReflowPause(state);
+            Plugin.ModLog.LogInfo("Pause dialog prepared five matching native left-hand cards in the gameplay-sized rail; centre menu remains native.");
         }
         catch (Exception ex)
         {
@@ -513,6 +528,125 @@ internal static class FivePlayerHud
             catch (Exception restoreError) { Plugin.ModLog.LogDebug(restoreError.Message); }
             Plugin.ModLog.LogWarning($"Could not prepare five-player pause dialog: {ex}");
         }
+    }
+
+    private static PlayerView FindPauseLeftTemplate(Il2CppReferenceArray<PlayerView> views,
+        RectTransform canvas)
+    {
+        PlayerView result = null;
+        float best = 0.05f;
+        for (int index = 0; index < views.Length; index++)
+        {
+            PlayerView panel = views[index];
+            if (panel == null) throw new InvalidOperationException("Pause has an unassigned player slot.");
+            if (!string.IsNullOrEmpty(panel.PlayerId))
+                throw new InvalidOperationException("Pause player views are already bound; refusing to clone live player identities.");
+            Rect avatar = GetPauseElementBounds(panel._avatarPlaceholder, canvas);
+            Rect name = GetPauseElementBounds(panel._playerName?.transform, canvas);
+            Rect frame = GetFrameBounds(panel, canvas);
+            if (avatar.width < 1f || name.width < 1f || frame.width < 1f) continue;
+            float handedness = (name.center.x - avatar.center.x) / frame.width;
+            if (handedness <= best) continue;
+            best = handedness;
+            result = panel;
+        }
+        return result ?? throw new InvalidOperationException("Pause has no measurable left-hand native card template.");
+    }
+
+    private static Rect GetPauseElementBounds(Transform element, RectTransform canvas)
+    {
+        float left = float.PositiveInfinity, top = float.NegativeInfinity;
+        float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
+        IncludeBounds(element, canvas, ref left, ref top, ref right, ref bottom);
+        return float.IsInfinity(left) || float.IsInfinity(top) ? default :
+            new Rect(left, bottom, right - left, top - bottom);
+    }
+
+    private static RectTransform FindPauseCanvas(PausePlayerPanelsView view)
+    {
+        RectTransform result = null;
+        Transform current = view.transform;
+        while (current != null)
+        {
+            // Walk the non-generic API rather than the invalid generated
+            // GetComponentInParent<T>(bool) bridge on this Unity build.
+            Component canvas = current.gameObject.GetComponent(Il2CppType.Of<Canvas>());
+            RectTransform rect = current.TryCast<RectTransform>();
+            if (canvas != null && rect != null && rect.rect.width >= 500f && rect.rect.height >= 300f)
+                result = rect;
+            current = current.parent;
+        }
+        return result;
+    }
+
+    internal static void ReflowPauseActive()
+    {
+        if (!ModState.IsSpecialMapActive || Pauses.Count == 0) return;
+        foreach (PauseState state in new List<PauseState>(Pauses.Values))
+        {
+            try
+            {
+                if (state.View != null && state.Column != null && state.View.gameObject.activeInHierarchy)
+                    ReflowPause(state);
+            }
+            catch (Exception ex)
+            {
+                ReportPauseLayoutError(state, ex);
+            }
+        }
+    }
+
+    private static void ReflowPause(PauseState state)
+    {
+        if (!ModState.IsSpecialMapActive || state.Canvas == null || state.Expanded == null ||
+            state.Column == null || state.View?._sortedPlayersViews?.Pointer != state.Expanded.Pointer) return;
+        try
+        {
+            RectTransform canvas = state.Canvas;
+            float width = canvas.rect.width, height = canvas.rect.height;
+            if (width < 500f || height < 300f) return;
+            float rowHeight = height * 0.14f;
+            float top = canvas.rect.yMax - height * 0.12f;
+            float left = canvas.rect.xMin + 18f;
+            bool allFitted = true;
+            for (int index = 0; index < state.Expanded.Length; index++)
+            {
+                PlayerView panel = state.Expanded[index];
+                if (panel == null) { allFitted = false; continue; }
+                Transform root = panel.transform;
+                // Derive the fit from a saved baseline each frame. Native
+                // opening animations can write these roots after factory
+                // creation; multiplying the previous fit would shrink cards
+                // again on each LateUpdate.
+                root.localScale = state.BaseScales[index];
+                Rect frame = GetFrameBounds(panel, canvas);
+                if (frame.width < 1f || frame.height < 1f) { allFitted = false; continue; }
+                float scale = Mathf.Min(0.65f, width * 0.145f / frame.width);
+                scale = Mathf.Min(scale, (rowHeight - 32f) / frame.height);
+                scale = Mathf.Max(0.25f, scale);
+                Vector3 baseline = state.BaseScales[index];
+                root.localScale = new Vector3(baseline.x * scale, baseline.y * scale, baseline.z);
+                frame = GetFrameBounds(panel, canvas);
+                root.position += canvas.TransformVector(new Vector3(left - frame.xMin,
+                    top - rowHeight * index - frame.yMax, 0f));
+                if (!state.CardLogged[index])
+                {
+                    Rect fitted = GetFrameBounds(panel, canvas);
+                    Plugin.ModLog.LogInfo($"Five-player pause card {index}: type={panel.PlayerViewPositionType}, frame=({fitted.xMin:F0},{fitted.yMin:F0},{fitted.width:F0},{fitted.height:F0}), scale={root.localScale.x:F3}.");
+                    state.CardLogged[index] = true;
+                }
+            }
+            if (allFitted) state.LayoutLogged = true;
+            state.LastError = null;
+        }
+        catch (Exception ex) { ReportPauseLayoutError(state, ex); }
+    }
+
+    private static void ReportPauseLayoutError(PauseState state, Exception error)
+    {
+        if (string.Equals(state.LastError, error.Message, StringComparison.Ordinal)) return;
+        state.LastError = error.Message;
+        Plugin.ModLog.LogWarning($"Could not balance five-player pause cards: {error.Message}");
     }
 
     internal static void ReleasePause(PausePlayerPanelsView view)
@@ -813,6 +947,7 @@ internal static class FivePlayerHud
         private readonly int _sibling;
         private readonly Vector3 _position;
         private readonly Vector3 _scale;
+        private readonly Quaternion _rotation;
         private readonly Vector2 _anchorMin;
         private readonly Vector2 _anchorMax;
         private readonly Vector2 _pivot;
@@ -826,6 +961,7 @@ internal static class FivePlayerHud
             _sibling = transform.GetSiblingIndex();
             _position = transform.localPosition;
             _scale = transform.localScale;
+            _rotation = transform.localRotation;
             RectTransform rect = transform.TryCast<RectTransform>();
             if (rect != null)
             {
@@ -843,6 +979,7 @@ internal static class FivePlayerHud
             _transform.SetParent(_parent, false);
             _transform.SetSiblingIndex(_sibling);
             _transform.localScale = _scale;
+            _transform.localRotation = _rotation;
             RectTransform rect = _transform.TryCast<RectTransform>();
             if (rect != null)
             {
@@ -946,18 +1083,81 @@ internal static class FivePlayerHud
     {
         private readonly PausePlayerPanelsView _view;
         private readonly Il2CppReferenceArray<PlayerView> _original;
+        private readonly bool[] _originalActive;
+        private readonly Dictionary<IntPtr, PauseFactoryState> _factories = new();
+        internal PausePlayerPanelsView View => _view;
         internal Il2CppReferenceArray<PlayerView> Expanded;
+        internal readonly Vector3[] BaseScales = new Vector3[ModState.FivePlayers];
+        internal readonly bool[] CardLogged = new bool[ModState.FivePlayers];
+        internal GameObject Column;
+        internal RectTransform Canvas;
+        internal bool LayoutLogged;
+        internal string LastError;
 
         internal PauseState(PausePlayerPanelsView view, Il2CppReferenceArray<PlayerView> original)
         {
             _view = view;
             _original = original;
+            _originalActive = new bool[original.Length];
+            for (int index = 0; index < original.Length; index++)
+                _originalActive[index] = original[index] != null && original[index].gameObject.activeSelf;
+        }
+
+        internal void AttachFactory(GameplayPlayerPanelFactory factory)
+        {
+            if (!_factories.ContainsKey(factory.Pointer))
+            {
+                var prior = factory._playersViews;
+                if (prior?.Pointer == Expanded.Pointer)
+                    prior = new Il2CppSystem.Collections.Generic.IList<PlayerView>(_original.Pointer);
+                _factories.Add(factory.Pointer, new PauseFactoryState(factory, prior));
+            }
+            factory._playersViews = new Il2CppSystem.Collections.Generic.IList<PlayerView>(Expanded.Pointer);
         }
 
         internal void Restore()
         {
-            if (_view != null) _view._sortedPlayersViews = _original;
-            RestoreObjects();
+            try
+            {
+                foreach (PauseFactoryState factory in _factories.Values)
+                {
+                    try
+                    {
+                        if (factory.Factory._playersViews?.Pointer == Expanded?.Pointer)
+                            factory.Factory._playersViews = factory.Original;
+                    }
+                    catch (Exception ex) { Plugin.ModLog.LogDebug($"Pause factory already released: {ex.Message}"); }
+                }
+                if (_view != null && (_view._sortedPlayersViews?.Pointer == Expanded?.Pointer ||
+                    _view._sortedPlayersViews?.Pointer == _original?.Pointer))
+                    _view._sortedPlayersViews = _original;
+            }
+            finally
+            {
+                for (int index = 0; index < _original.Length; index++)
+                {
+                    try
+                    {
+                        if (_original[index] != null)
+                            _original[index].gameObject.SetActive(_originalActive[index]);
+                    }
+                    catch (Exception ex) { Plugin.ModLog.LogDebug($"Pause original card already released: {ex.Message}"); }
+                }
+                RestoreObjects();
+                if (Column != null) UnityEngine.Object.Destroy(Column);
+            }
+        }
+
+        private sealed class PauseFactoryState
+        {
+            internal readonly GameplayPlayerPanelFactory Factory;
+            internal readonly Il2CppSystem.Collections.Generic.IList<PlayerView> Original;
+            internal PauseFactoryState(GameplayPlayerPanelFactory factory,
+                Il2CppSystem.Collections.Generic.IList<PlayerView> original)
+            {
+                Factory = factory;
+                Original = original;
+            }
         }
     }
 }

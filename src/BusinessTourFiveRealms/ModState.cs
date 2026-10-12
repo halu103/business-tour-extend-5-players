@@ -9,9 +9,11 @@ internal static class ModState
 {
     internal const int VanillaPlayers = 4;
     internal const int FivePlayers = 5;
-    internal const string MapId = "BT5_FIVE_REALMS_V1";
+    // V3 changes the service inventory/positions from the V2 development map.
+    // Never synchronize either graph with V1 previews or the V2 candidate.
+    internal const string MapId = "BT5_FIVE_REALMS_V3";
     internal const string DisplayName = "Five Realms — 5 Players";
-    internal const string MapPathTag = "::BT5P1";
+    internal const string MapPathTag = "::BT5P3";
     internal const string RoomModeProperty = "BT5_MODE";
 
     private static bool _specialMapActive;
@@ -98,7 +100,11 @@ internal static class ModState
             Il2CppSystem.Object value = properties[(Il2CppSystem.String)RoomModeProperty];
             if (value != null)
             {
-                SetSpecialMap(string.Equals(value.ToString(), MapId, StringComparison.Ordinal), source);
+                string marker = value.ToString();
+                bool compatible = string.Equals(marker, MapId, StringComparison.Ordinal);
+                if (!compatible && marker.StartsWith("BT5_FIVE_REALMS_", StringComparison.Ordinal))
+                    Plugin.ModLog.LogError("Incompatible Five Realms room topology " + marker + "; this client requires " + MapId + ". Do not start or ready in this room; all clients must use the same package.");
+                SetSpecialMap(compatible, source);
                 return true;
             }
         }
@@ -131,10 +137,12 @@ internal static class ModState
         }
         else
         {
+            FivePlayerHud.Reset();
             PentagonalSpriteGeometry.Reset();
             FifthPawnPlacement.Restore();
             CompositeMapPatch.Reset();
             FivePlayerPaymentUi.Reset();
+            FivePlayerResortBindings.Reset();
         }
         Plugin.ModLog.LogInfo($"Five-player map mode {(active ? "enabled" : "disabled")} ({source}).");
     }

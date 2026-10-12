@@ -9,6 +9,45 @@ namespace BusinessTourFiveRealms;
 // triangle: missing artwork stays missing and reveals the native-colored bed.
 internal static class CanonicalTileProjection
 {
+    // Upright native artwork cannot be deformed with the ground mesh. Move
+    // only its owning anchor through the same bilinear face mapping instead.
+    // Some native indicators are deliberately outside the baked face; use
+    // the closest point on that face before applying an interior margin.
+    internal static Vector2 ProjectAnchor(IReadOnlyList<Vector2> sourceQuad,
+        IReadOnlyList<Vector2> targetQuad, Vector2 position, float inset = .1f,
+        float minimumOuterFraction = 0f)
+    {
+        var source = new Quad(sourceQuad, nameof(sourceQuad));
+        var target = new Quad(targetQuad, nameof(targetQuad));
+        if (!Finite(position) || !float.IsFinite(inset) || inset < 0f || inset >= .5f ||
+            !float.IsFinite(minimumOuterFraction) || minimumOuterFraction < 0f ||
+            minimumOuterFraction > 1f-inset)
+            throw new ArgumentException("Invalid native artwork anchor.");
+        Point point = new(position);
+        bool inside = true;
+        for (int index = 0; index < 4; index++)
+            if (Cross(source.Corners[(index+1)%4]-source.Corners[index],
+                point-source.Corners[index])*source.Winding < 0d) inside = false;
+        if (!inside)
+        {
+            double nearest = double.PositiveInfinity;
+            Point closest = default;
+            for (int index = 0; index < 4; index++)
+            {
+                Point a=source.Corners[index], edge=source.Corners[(index+1)%4]-a;
+                double fraction=Math.Clamp(Dot(point-a,edge)/edge.LengthSquared,0d,1d);
+                Point candidate=a+edge*fraction;
+                double distance=(candidate-point).LengthSquared;
+                if (distance<nearest) { nearest=distance; closest=candidate; }
+            }
+            point=closest;
+        }
+        Point coordinate=source.Coordinates(point);
+        coordinate=new Point(Math.Clamp(coordinate.X,inset,1d-inset),
+            Math.Clamp(coordinate.Y,Math.Max(inset,minimumOuterFraction),1d-inset));
+        return target.Evaluate(coordinate).ToVector2();
+    }
+
     internal static CanonicalTileMesh Project(IReadOnlyList<Vector2> sourceQuad,
         IReadOnlyList<Vector2> targetQuad, IReadOnlyList<Vector2> spritePositions,
         IReadOnlyList<Vector2> spriteUv, IReadOnlyList<int> triangleIndices)

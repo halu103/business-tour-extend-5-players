@@ -8,26 +8,14 @@ using UnityEngine;
 namespace BusinessTourFiveRealms;
 
 // Observes an existing GameView rather than scanning Unity objects or detouring
-// shared generic window-animation methods. All buttons and money remain native.
+// shared generic window-animation methods. Purchase windows retain their exact
+// native hierarchy and geometry; only bounded rent/debt typography is changed.
 internal static class FivePlayerPaymentUi
 {
     private static UIManager<LogicAtomWindowGameplay> _manager;
-    private static readonly Dictionary<IntPtr, DialogState> Dialogs = new();
     private static readonly Dictionary<IntPtr, MoneyLabelState> MoneyLabels = new();
     private static readonly Dictionary<IntPtr, int> NativeFontOverrides = new();
     private static string _lastError;
-
-    private static readonly LogicAtomWindowGameplay[] PurchaseWindows =
-    {
-        LogicAtomWindowGameplay.WndGamePlayBuyCity,
-        LogicAtomWindowGameplay.WndGamePlayBuyAliceRoom,
-        LogicAtomWindowGameplay.WndBuyHotel,
-        LogicAtomWindowGameplay.WndBuyResort,
-        LogicAtomWindowGameplay.WndBuyout,
-        LogicAtomWindowGameplay.WndIslandEscape,
-        LogicAtomWindowGameplay.WndRogueTrapEscape,
-        LogicAtomWindowGameplay.WndWonderlandTravelEscape
-    };
 
     // Wire into the existing GameView.OnLocationLoaded postfix. No additional
     // Harmony target or generic Context.Get service lookup is needed.
@@ -53,52 +41,14 @@ internal static class FivePlayerPaymentUi
         {
             var opened = _manager.OpenedWindows;
             if (opened == null) return;
-            foreach (LogicAtomWindowGameplay key in PurchaseWindows)
-            {
-                if (!opened.TryGetValue(key, out var window)) continue;
-                var controller = window?.TryCast<Window<LogicAtomWindowGameplay>>();
-                var view = controller?._baseView?.TryCast<UIWindowCommonView>();
-                if (view == null || !view.gameObject.activeInHierarchy || !IsPurchaseView(view)) continue;
-                RectTransform rect = view._windowRectTransform;
-                if (rect == null) continue;
-                bool tracked = Dialogs.TryGetValue(rect.Pointer, out DialogState state);
-                if (tracked && !state.Matches(view, rect))
-                {
-                    // A pooled rect can acquire another native view owner. Do
-                    // not re-use the previous owner's saved layout or wrapper.
-                    if (!state.Restore()) continue;
-                    Dialogs.Remove(rect.Pointer);
-                    tracked = false;
-                }
-                if (!tracked)
-                {
-                    RectTransform canvas = FindCanvas(rect);
-                    if (!IsDialogRect(rect, canvas)) continue;
-                    state = new DialogState(view, rect, canvas);
-                    try { state.Attach(); }
-                    catch
-                    {
-                        // Failed reparenting must not delete a wrapper that
-                        // still contains the native dialog. Retain it to retry.
-                        if (!state.Restore()) Dialogs[rect.Pointer] = state;
-                        throw;
-                    }
-                    Dialogs.Add(rect.Pointer, state);
-                    Plugin.ModLog.LogInfo($"Five-player purchase dialog enlargement prepared for {view.GetIl2CppType().Name}; native actions unchanged.");
-                }
-                if (state.Matches(view, rect)) state.Reflow();
-            }
-
+            // Native Show/Close owns _windowRectTransform and its scale tween.
+            // Inserting an extra RectTransform and rewriting the native anchors
+            // is not a safe presentation-only resize: it changes the parent
+            // space used by the pooled view and its descendants. Do not touch
+            // purchase/repurchase windows, including their close/confirm buttons.
             ObserveDebtLabels(opened);
 
             var stale = new List<IntPtr>();
-            foreach (var pair in Dialogs)
-                if (!pair.Value.IsAlive) stale.Add(pair.Key);
-            foreach (IntPtr key in stale)
-            {
-                if (Dialogs[key].Restore()) Dialogs.Remove(key);
-            }
-            stale.Clear();
             foreach (var pair in MoneyLabels)
                 if (!pair.Value.IsAlive) stale.Add(pair.Key);
             foreach (IntPtr key in stale)
@@ -110,16 +60,12 @@ internal static class FivePlayerPaymentUi
     internal static void Reset()
     {
         var restored = new List<IntPtr>();
-        foreach (var pair in Dialogs)
-            if (pair.Value.Restore()) restored.Add(pair.Key);
-        foreach (IntPtr key in restored) Dialogs.Remove(key);
-        restored.Clear();
         foreach (var pair in MoneyLabels)
             if (pair.Value.Restore()) restored.Add(pair.Key);
         foreach (IntPtr key in restored) MoneyLabels.Remove(key);
         NativeFontOverrides.Clear();
         _manager = null;
-        if (Dialogs.Count == 0 && MoneyLabels.Count == 0) _lastError = null;
+        if (MoneyLabels.Count == 0) _lastError = null;
     }
 
     private static void ObserveDebtLabels(Il2CppSystem.Collections.Generic.Dictionary<LogicAtomWindowGameplay,
@@ -193,13 +139,8 @@ internal static class FivePlayerPaymentUi
         string message = ex.GetType().Name + ": " + ex.Message;
         if (string.Equals(message, _lastError, StringComparison.Ordinal)) return;
         _lastError = message;
-        Plugin.ModLog.LogWarning("Purchase dialog enlargement was skipped safely: " + message);
+        Plugin.ModLog.LogWarning("Rent/debt font enlargement was skipped safely: " + message);
     }
-
-    private static bool IsPurchaseView(UIWindowCommonView view) =>
-        view.TryCast<UIBuyCityView>() != null || view.TryCast<UIWindowBuyHotel>() != null ||
-        view.TryCast<UIWindowBuyResort>() != null || view.TryCast<UIWindowBuyout>() != null ||
-        view.TryCast<UIWindowIslandEscape>() != null;
 
     private static RectTransform FindCanvas(Transform transform)
     {
@@ -212,140 +153,6 @@ internal static class FivePlayerPaymentUi
         return null;
     }
 
-    private static bool IsDialogRect(RectTransform rect, RectTransform canvas)
-    {
-        if (canvas == null || rect.parent == null || rect.Pointer == canvas.Pointer ||
-            rect.GetComponent<Canvas>() != null) return false;
-        Rect dialog = rect.rect, screen = canvas.rect;
-        // Full-screen selection backgrounds and the root Canvas are not dialogs.
-        return dialog.width > 1f && dialog.height > 1f && screen.width > 1f && screen.height > 1f &&
-            dialog.width < screen.width * .9f && dialog.height < screen.height * .9f;
-    }
-
-    private sealed class DialogState
-    {
-        private readonly UIWindowCommonView _view;
-        private readonly RectTransform _rect, _canvas;
-        private readonly Transform _parent;
-        private readonly int _sibling;
-        private readonly int _viewInstance, _rectInstance, _canvasInstance, _parentInstance;
-        private readonly Vector2 _minimum, _maximum, _pivot, _size;
-        private readonly Vector3 _position;
-        private readonly Quaternion _rotation;
-        private GameObject _holder;
-        private RectTransform _wrapper;
-        private int _wrapperInstance;
-
-        internal DialogState(UIWindowCommonView view, RectTransform rect, RectTransform canvas)
-        {
-            _view = view; _rect = rect; _canvas = canvas;
-            _parent = rect.parent; _sibling = rect.GetSiblingIndex();
-            _viewInstance = view.GetInstanceID(); _rectInstance = rect.GetInstanceID();
-            _canvasInstance = canvas.GetInstanceID(); _parentInstance = _parent.GetInstanceID();
-            _minimum = rect.anchorMin; _maximum = rect.anchorMax;
-            _pivot = rect.pivot; _size = rect.sizeDelta;
-            _position = rect.anchoredPosition3D; _rotation = rect.localRotation;
-        }
-
-        private bool OwnsRectGeneration => _rect != null && _rect.GetInstanceID() == _rectInstance;
-        private bool OwnsWrapperGeneration => _wrapper != null && _wrapper.GetInstanceID() == _wrapperInstance;
-
-        internal bool IsAlive => OwnsRectGeneration && OwnsWrapperGeneration &&
-            _canvas != null && _canvas.GetInstanceID() == _canvasInstance &&
-            _view != null && _view.GetInstanceID() == _viewInstance &&
-            _view._windowRectTransform?.Pointer == _rect.Pointer &&
-            _rect.parent?.Pointer == _wrapper.Pointer;
-
-        internal bool Matches(UIWindowCommonView view, RectTransform rect) =>
-            IsAlive && view.Pointer == _view.Pointer && view.GetInstanceID() == _viewInstance &&
-            rect.Pointer == _rect.Pointer && rect.GetInstanceID() == _rectInstance;
-
-        internal void Attach()
-        {
-            _holder = new GameObject("FiveRealmsPurchaseDialogScale");
-            _holder.layer = _rect.gameObject.layer;
-            _wrapper = _holder.AddComponent<RectTransform>();
-            _wrapperInstance = _wrapper.GetInstanceID();
-            _wrapper.SetParent(_parent, false);
-            _wrapper.SetSiblingIndex(_sibling);
-            _wrapper.anchorMin = _minimum; _wrapper.anchorMax = _maximum;
-            _wrapper.pivot = _pivot; _wrapper.sizeDelta = _size;
-            _wrapper.anchoredPosition3D = _position;
-            _wrapper.localRotation = _rotation; _wrapper.localScale = Vector3.one;
-
-            _rect.SetParent(_wrapper, false);
-            _rect.anchorMin = Vector2.zero; _rect.anchorMax = Vector2.one;
-            _rect.pivot = _pivot; _rect.sizeDelta = Vector2.zero;
-            _rect.anchoredPosition3D = Vector3.zero; _rect.localRotation = Quaternion.identity;
-            // Do not change the child's localScale: native Show/Close tweens it.
-            Reflow();
-        }
-
-        internal void Reflow()
-        {
-            if (!IsAlive) return;
-            var corners = new Il2CppStructArray<Vector3>(4);
-            _wrapper.GetWorldCorners(corners);
-            Vector3 origin = _canvas.InverseTransformPoint(_wrapper.position);
-            float current = _wrapper.localScale.x;
-            if (current <= 0f || !float.IsFinite(current)) return;
-            float left = float.PositiveInfinity, right = float.NegativeInfinity;
-            float bottom = float.PositiveInfinity, top = float.NegativeInfinity;
-            foreach (Vector3 corner in corners)
-            {
-                Vector3 point = _canvas.InverseTransformPoint(corner);
-                // Obtain nominal unscaled bounds without writing transforms
-                // while the native open/close animation is running.
-                point = origin + (point - origin) / current;
-                left = Mathf.Min(left, point.x); right = Mathf.Max(right, point.x);
-                bottom = Mathf.Min(bottom, point.y); top = Mathf.Max(top, point.y);
-            }
-            Rect viewport = _canvas.rect;
-            float scale = PaymentUiLayoutRules.FitScale(left, right, bottom, top, origin.x, origin.y,
-                viewport.xMin, viewport.xMax, viewport.yMin, viewport.yMax);
-            _wrapper.localScale = new Vector3(scale, scale, 1f);
-        }
-
-        internal bool Restore()
-        {
-            try
-            {
-                // A different native owner may have reparented a pooled view;
-                // never move it back using stale ownership information.
-                if (OwnsRectGeneration && OwnsWrapperGeneration && _rect.parent?.Pointer == _wrapper.Pointer)
-                {
-                    if (_parent == null || _parent.GetInstanceID() != _parentInstance)
-                    {
-                        Report(new InvalidOperationException("The original dialog parent is unavailable; its native child is retained for safe cleanup."));
-                        return false;
-                    }
-                    _rect.SetParent(_parent, false); _rect.SetSiblingIndex(_sibling);
-                    _rect.anchorMin = _minimum; _rect.anchorMax = _maximum;
-                    _rect.pivot = _pivot; _rect.sizeDelta = _size;
-                    _rect.anchoredPosition3D = _position; _rect.localRotation = _rotation;
-                    // localScale stays at its current native animation value,
-                    // exactly the property that this helper never modified.
-                }
-                // Destroying a Transform also destroys its children. Never
-                // hide/delete this wrapper while any native child remains,
-                // even when restoration failed or its generation has changed.
-                Transform holderTransform = _holder == null ? null : _holder.transform;
-                if (holderTransform != null && holderTransform.childCount != 0)
-                {
-                    Report(new InvalidOperationException("A purchase wrapper still owns native children; cleanup will be retried without hiding them."));
-                    return false;
-                }
-                if (_holder != null)
-                {
-                    _holder.SetActive(false);
-                    UnityEngine.Object.Destroy(_holder);
-                }
-                _holder = null; _wrapper = null;
-                return true;
-            }
-            catch (Exception ex) { Report(ex); return false; }
-        }
-    }
 
     private sealed class MoneyLabelState
     {

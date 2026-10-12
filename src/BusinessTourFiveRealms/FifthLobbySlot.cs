@@ -31,6 +31,7 @@ public sealed class FifthLobbySlotUpdater : MonoBehaviour
         // after ShowPlayers. Fit only our active five-seat views after them.
         SlotExpander.ReflowActiveVersus();
         FivePlayerHud.ReflowPauseActive();
+        FivePlayerHud.ReflowGameplayActive();
     }
 
     public void Update()
@@ -43,6 +44,7 @@ public sealed class FifthLobbySlotUpdater : MonoBehaviour
         if (Time.unscaledTime >= _nextSpriteSync)
         {
             _nextSpriteSync = Time.unscaledTime + 0.1f;
+            BoardLabelPresentation.RetryPendingMaterialCleanup();
             PentagonalSpriteGeometry.SyncAll();
         }
         if (Time.unscaledTime < _nextCheck)
@@ -549,6 +551,10 @@ internal static class FifthLobbySlot
         internal void RestoreVanillaResources()
         {
             bool hadResources = _resourcesAttached;
+            // Ready belongs to the retained native avatar config, not a custom
+            // permanently visible check. Clear it while that owned provider is
+            // still attached; reselecting the map will read the room again.
+            if (_resourcesAttached) SyncNativeReady(null);
             // Release pawn visuals while its fifth config is still reachable.
             // Keep its one set of callbacks dormant on the retained attributes;
             // reselecting Five Realms reuses it instead of binding duplicates.
@@ -793,6 +799,7 @@ internal static class FifthLobbySlot
 
             if (info == null)
             {
+                SyncNativeReady(null);
                 _attributes.Release();
                 _panel.ShowEmptyPanel();
                 if (!master)
@@ -807,12 +814,17 @@ internal static class FifthLobbySlot
                 {
                     color = RoomSettingsExtensions.FfaPlayerColors.Length > SlotIndex
                         ? RoomSettingsExtensions.FfaPlayerColors[SlotIndex]
-                        : PlayerColor.Blue2;
+                        : PlayerColor.Red2;
                 }
                 _panel.ShowPawnPanel();
                 _panel.ShowKickButton(master);
                 _panel.ShowToMyTeamButton(false);
                 Controller.InitializeSlotAttributes(SlotIndex, color, info);
+                // InitializeSlotAttributes updates the config's color/identity
+                // and refreshes the native avatar, but never assigns IsReady.
+                // Set ready afterwards: its native decorator needs that color
+                // and the freshly created UIAvatar to render the normal check.
+                SyncNativeReady(info);
                 bool changePawn = Controller.CheckNeedToShowPawnButtons(info, master);
                 Controller.UpdateChangeInputControlPanel(SlotIndex, changePawn);
                 _panel.ShowSelectPawnButtons(changePawn);
@@ -827,6 +839,24 @@ internal static class FifthLobbySlot
             _snapshot = snapshot;
             Plugin.ModLog.LogInfo(info == null ? "Fifth private-lobby slot is empty." :
                 $"Fifth private-lobby slot contains {info.DisplayedName} (bot={info.IsBot}, ready={info.IsReady}).");
+        }
+
+        private void SyncNativeReady(IRoomPlayerInfo info)
+        {
+            if (_fifthAvatarConfig == null || _fifthAvatarProvider == null) return;
+            bool ready = FifthLobbyPresentationRules.ShowReady(info != null, info?.IsReady ?? false);
+            bool changed = _fifthAvatarConfig.IsReady != ready;
+            _fifthAvatarConfig.IsReady = ready;
+            if (!changed)
+            {
+                // Native Refresh can rebuild the portrait while ready remains
+                // true. Its setter suppresses equal-value events, so reapply
+                // the same native decorator after a refresh, without changing
+                // readiness, adding listeners, or touching the other seats.
+                var decorator = _fifthAvatarProvider.TryCast<ReadyStateDecorator>();
+                decorator?.OnReadyStateChanged(new Il2CppSystem.Object(_fifthAvatarConfig.Pointer),
+                    Il2CppSystem.EventArgs.Empty);
+            }
         }
 
         internal void SetVisible(bool visible)
@@ -1100,23 +1130,13 @@ internal static class FifthPlayerColors
             {
                 expanded[index] = colors[index];
             }
-            // Every value already has native pawn, title and HUD assets. Pick
-            // a native color absent from the four-player palette.
-            PlayerColor fifth = PlayerColor.Blue2;
-            foreach (PlayerColor candidate in new[]
-                { PlayerColor.Blue2, PlayerColor.Red2, PlayerColor.Green, PlayerColor.Yellow, PlayerColor.Blue, PlayerColor.Red })
-            {
-                bool present = false;
-                for (int index = 0; index < colors.Length; index++)
-                {
-                    present |= colors[index] == candidate;
-                }
-                if (!present)
-                {
-                    fifth = candidate;
-                    break;
-                }
-            }
+            // The shipped enum has no purple. Its Red2 assets are coral /
+            // orange-red (#E44D37), distinct from vanilla Red's magenta and
+            // from the old Blue2 cyan. Keep real native pawn/HUD/land assets
+            // and never reuse a color already present in the first four.
+            var existing = new int[colors.Length];
+            for (int index = 0; index < colors.Length; index++) existing[index] = (int)colors[index];
+            PlayerColor fifth = (PlayerColor)FifthLobbyPresentationRules.SelectAdditionalColor(existing);
             for (int index = colors.Length; index < expanded.Length; index++)
             {
                 expanded[index] = fifth;

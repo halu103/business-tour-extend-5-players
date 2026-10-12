@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -172,8 +173,8 @@ namespace BusinessTourFiveRealmsInstaller
                 LoaderState state = InspectLoader(gameRoot, payload.Manifest, log);
                 ReadExistingMarker(gameRoot, true, log);
                 log(state == LoaderState.Exact
-                    ? "Verification complete. A matching BepInEx installation will be preserved."
-                    : "Verification complete. The pinned BepInEx build can be installed safely.");
+                    ? "Checks passed. The compatible BepInEx loader will be kept."
+                    : "Checks passed. The compatible BepInEx loader can be installed.");
             }
         }
 
@@ -229,7 +230,7 @@ namespace BusinessTourFiveRealmsInstaller
                         {
                             CopyPayloadFile(gameRoot, payload.Root, file);
                         }
-                        log("Pinned BepInEx build installed.");
+                        log("Compatible BepInEx loader installed.");
                     }
                     else
                     {
@@ -268,12 +269,12 @@ namespace BusinessTourFiveRealmsInstaller
                     catch (Exception rollbackError)
                     {
                         throw new InvalidOperationException(
-                            "Installation failed and rollback also failed. Backup: " + backup.BackupRoot +
+                            "Installation failed. The previous files could not be fully restored. Backup: " + backup.BackupRoot +
                             Environment.NewLine + "Install error: " + operationError.Message +
-                            Environment.NewLine + "Rollback error: " + rollbackError.Message,
+                            Environment.NewLine + "Restore error: " + rollbackError.Message,
                             operationError);
                     }
-                    throw new InvalidOperationException("Installation failed; all managed files were rolled back. " +
+                    throw new InvalidOperationException("Installation failed. All files changed by setup were restored. " +
                         operationError.Message, operationError);
                 }
             }
@@ -326,8 +327,8 @@ namespace BusinessTourFiveRealmsInstaller
                 string full = PathSecurity.CombineInside(gameRoot, relative);
                 if (File.Exists(full))
                 {
-                    throw new InvalidDataException("A different root-level injector is present: " + relative +
-                        ". Remove or isolate it before installing this mod.");
+                    throw new InvalidDataException("Another mod tool is using this game folder: " + relative +
+                        ". Move it to a backup folder before installing Five Realms.");
                 }
             }
 
@@ -353,15 +354,15 @@ namespace BusinessTourFiveRealmsInstaller
                 PathSecurity.RejectReparsePoints(gameRoot, destination);
                 if (!File.Exists(destination))
                 {
-                    throw new InvalidDataException("A partial or different BepInEx installation was detected. Missing: " + relative);
+                    throw new InvalidDataException("The BepInEx loader is incomplete or a different version. Missing file: " + relative);
                 }
                 string actual = Hashing.Sha256(destination);
                 if (!String.Equals(actual, file.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
-                    throw new InvalidDataException("A different BepInEx installation was detected. File differs: " + relative);
+                    throw new InvalidDataException("A different BepInEx loader version is installed. File does not match: " + relative);
                 }
             }
-            log("The installed BepInEx files exactly match the pinned build.");
+            log("The installed BepInEx loader matches the supported version.");
             return LoaderState.Exact;
         }
 
@@ -376,8 +377,8 @@ namespace BusinessTourFiveRealmsInstaller
                 if (rejectUnownedDirectory && Directory.Exists(pluginRoot) &&
                     Directory.EnumerateFileSystemEntries(pluginRoot).Any())
                 {
-                    throw new InvalidDataException("The Five Realms plugin folder exists without a valid install marker. " +
-                        "Move or remove that folder manually before installing.");
+                    throw new InvalidDataException("The Five Realms folder has no valid installation record. " +
+                        "Move that folder to a backup location before installing.");
                 }
                 return null;
             }
@@ -389,10 +390,10 @@ namespace BusinessTourFiveRealmsInstaller
             }
             catch (Exception error)
             {
-                throw new InvalidDataException("The existing install marker cannot be read: " + error.Message, error);
+                throw new InvalidDataException("The existing installation record cannot be read: " + error.Message, error);
             }
             ValidateMarker(marker);
-            log("Existing managed installation detected: version " + marker.ModVersion + ".");
+            log("Five Realms " + marker.ModVersion + " is already installed.");
             return marker;
         }
 
@@ -517,7 +518,7 @@ namespace BusinessTourFiveRealmsInstaller
 
         internal SetupForm()
         {
-            Text = "Business Tour Five Realms - Cài đặt";
+            Text = "Business Tour Five Realms - Setup";
             Width = 760;
             Height = 520;
             MinimumSize = new System.Drawing.Size(680, 430);
@@ -535,16 +536,16 @@ namespace BusinessTourFiveRealmsInstaller
             var note = new Label
             {
                 AutoSize = true,
-                Text = "Chọn đúng thư mục Business Tour. Trình cài đặt sẽ kiểm tra phiên bản trước khi thay đổi file.",
+                Text = "Choose the Business Tour folder. Setup checks the game version before changing files.",
                 Left = 20,
                 Top = 53
             };
-            var pathLabel = new Label { AutoSize = true, Text = "Thư mục game:", Left = 20, Top = 88 };
+            var pathLabel = new Label { AutoSize = true, Text = "Game folder:", Left = 20, Top = 88 };
             gamePath.Left = 20;
             gamePath.Top = 109;
             gamePath.Width = 600;
             gamePath.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            browseButton.Text = "Chọn...";
+            browseButton.Text = "Browse...";
             browseButton.Left = 630;
             browseButton.Top = 107;
             browseButton.Width = 95;
@@ -560,19 +561,19 @@ namespace BusinessTourFiveRealmsInstaller
             output.BackColor = System.Drawing.SystemColors.Window;
             output.DetectUrls = false;
 
-            verifyButton.Text = "Chỉ kiểm tra";
+            verifyButton.Text = "Check files";
             verifyButton.Left = 375;
             verifyButton.Top = 435;
             verifyButton.Width = 110;
             verifyButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             verifyButton.Click += delegate { RunOperation(false); };
-            installButton.Text = "Cài đặt";
+            installButton.Text = "Install";
             installButton.Left = 495;
             installButton.Top = 435;
             installButton.Width = 110;
             installButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             installButton.Click += delegate { RunOperation(true); };
-            closeButton.Text = "Đóng";
+            closeButton.Text = "Close";
             closeButton.Left = 615;
             closeButton.Top = 435;
             closeButton.Width = 110;
@@ -591,15 +592,15 @@ namespace BusinessTourFiveRealmsInstaller
             if (candidates.Count > 0)
             {
                 gamePath.Text = candidates[0];
-                Append("Đã tìm thấy thư mục game: " + candidates[0]);
+                Append("Game folder found: " + candidates[0]);
                 if (candidates.Count > 1)
                 {
-                    Append("Có nhiều bản cài đặt; hãy kiểm tra lại đường dẫn trước khi cài.");
+                    Append("More than one game folder was found. Check the selected folder before installing.");
                 }
             }
             else
             {
-                Append("Không tự tìm thấy game. Hãy bấm Chọn... và mở thư mục chứa BusinessTour.exe.");
+                Append("Game not found. Click Browse and choose the folder containing BusinessTour.exe.");
             }
         }
 
@@ -607,7 +608,7 @@ namespace BusinessTourFiveRealmsInstaller
         {
             using (var dialog = new FolderBrowserDialog())
             {
-                dialog.Description = "Chọn thư mục chứa BusinessTour.exe";
+                dialog.Description = "Choose the folder containing BusinessTour.exe.";
                 dialog.ShowNewFolderButton = false;
                 if (Directory.Exists(gamePath.Text))
                 {
@@ -629,13 +630,13 @@ namespace BusinessTourFiveRealmsInstaller
             string root = gamePath.Text.Trim();
             if (root.Length == 0)
             {
-                MessageBox.Show(this, "Hãy chọn thư mục Business Tour.", "Thiếu đường dẫn",
+                MessageBox.Show(this, "Choose the Business Tour game folder first.", "Game folder required",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             SetBusy(true);
-            Append(install ? "Bắt đầu cài đặt..." : "Bắt đầu kiểm tra...");
+            Append(install ? "Installing Five Realms..." : "Checking files...");
             ThreadPool.QueueUserWorkItem(delegate
             {
                 Exception failure = null;
@@ -653,7 +654,7 @@ namespace BusinessTourFiveRealmsInstaller
                 catch (Exception error)
                 {
                     failure = error;
-                    Append("LỖI: " + error.Message);
+                    Append("ERROR: " + error.Message);
                 }
 
                 BeginInvoke((Action)delegate
@@ -662,7 +663,7 @@ namespace BusinessTourFiveRealmsInstaller
                     if (failure == null)
                     {
                         MessageBox.Show(this,
-                            install ? "Cài đặt hoàn tất." : "Kiểm tra hoàn tất, không phát hiện xung đột.",
+                            install ? "Installation complete. You can start Business Tour from Steam." : "Checks passed. No game files were changed.",
                             "Five Realms", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         if (install)
                         {
@@ -671,7 +672,7 @@ namespace BusinessTourFiveRealmsInstaller
                     }
                     else
                     {
-                        MessageBox.Show(this, failure.Message, "Không thể tiếp tục",
+                        MessageBox.Show(this, failure.Message, install ? "Installation failed" : "Check failed",
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 });
@@ -710,7 +711,7 @@ namespace BusinessTourFiveRealmsInstaller
             if (busy)
             {
                 e.Cancel = true;
-                MessageBox.Show(this, "Đang xử lý file. Vui lòng chờ thao tác hoàn tất.", "Five Realms",
+                MessageBox.Show(this, "Please wait for the current task to finish.", "Five Realms",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
@@ -726,6 +727,7 @@ namespace BusinessTourFiveRealmsInstaller
         [STAThread]
         private static int Main(string[] args)
         {
+            Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo("en");
             SetupOptions options = null;
             if (args.Length > 0)
             {
@@ -757,7 +759,7 @@ namespace BusinessTourFiveRealmsInstaller
                 if (instance == null)
                 {
                     const string busyMessage =
-                        "Một cửa sổ cài đặt hoặc gỡ Five Realms đang mở. Hãy hoàn tất hoặc đóng cửa sổ đó trước.";
+                        "Five Realms Setup or Uninstall is already open. Close that window or wait for it to finish, then try again.";
                     if (args.Length == 0)
                     {
                         if (!MaintenanceSingleInstance.TryActivateExistingWindow())

@@ -4,7 +4,7 @@ using System.Collections.ObjectModel;
 
 namespace BusinessTourFiveRealms;
 
-// Unwired, pure planning policy. This does not create IL2CPP objects, change
+// Pure planning policy consumed by NativeFivePlayerMapTopology. This does not create IL2CPP objects, change
 // live map resources, assign a new native suit value, or invent cell prices.
 // An adapter must clone each complete native RawCellData identified below.
 internal static class FivePlayerTopologyRules
@@ -14,6 +14,50 @@ internal static class FivePlayerTopologyRules
     internal const int CellsPerSide = 8;
     internal const int ExpandedSideCount = 5;
     internal const string ExpansionCityGroup = "five-realms.expansion-cities";
+    internal const int ExpansionCitySuitId = 90;
+    internal const int NativeCityArtSuitId = 30;
+    internal const int FirstTrapCellId = 12;
+    internal const int SecondTrapCellId = FirstTrapCellId + ExpandedCellCount / 2;
+
+    internal static int[] TrapCellIds() => new[] { FirstTrapCellId, SecondTrapCellId };
+
+    internal static bool AreHalfRingApart(int first, int second, int cellCount) =>
+        cellCount >= 2 && cellCount % 2 == 0 && first >= 0 && first < cellCount &&
+        second >= 0 && second < cellCount && Math.Abs(first - second) == cellCount / 2;
+
+    internal static bool AreOppositeTrapCells(int first, int second, int cellCount) =>
+        AreHalfRingApart(first, second, cellCount);
+
+    // The only approved replacements inside the original service prefix.
+    // Every city and resort continues to use its original complete template.
+    internal static int OriginalTemplateCellId(int cellId)
+    {
+        if (cellId < 0 || cellId >= OriginalCellCount)
+            throw new ArgumentOutOfRangeException(nameof(cellId));
+        return cellId switch { 16 => 30, 28 => 8, 30 => 12, _ => cellId };
+    }
+
+    internal static int ResolveNativeSuit(TopologyCellPlan cell, bool expansionCityAssetsReady)
+    {
+        if (cell == null) throw new ArgumentNullException(nameof(cell));
+        if (cell.NativeSuitId.HasValue) return cell.NativeSuitId.Value;
+        if (!cell.Appended || cell.Kind != TopologyCellKind.City ||
+            cell.ExpansionCityGroup != ExpansionCityGroup || !expansionCityAssetsReady)
+            throw new InvalidOperationException("Independent added-city gameplay suit requires verified native artwork support.");
+        return ExpansionCitySuitId;
+    }
+
+    // Expected native progression only: this never replaces serialized tiers
+    // or native rent calculation. The adapter compares real native results.
+    internal static double ExpectedResortRent(double baseRent, double multiplier, int ownedCount)
+    {
+        if (!double.IsFinite(baseRent) || baseRent <= 0 || !double.IsFinite(multiplier) ||
+            multiplier <= 0 || ownedCount < 1 || ownedCount > ExpandedSideCount)
+            throw new ArgumentOutOfRangeException(nameof(ownedCount));
+        double rent = baseRent * Math.Pow(multiplier, ownedCount - 1);
+        if (!double.IsFinite(rent)) throw new ArgumentOutOfRangeException(nameof(multiplier));
+        return rent;
+    }
 
     // Inspected ClassicMap, not an assumed symmetric Monopoly board:
     // first side has six cities; the other sides have five/five/four.
@@ -35,22 +79,24 @@ internal static class FivePlayerTopologyRules
         var cells = new TopologyCellPlan[ExpandedCellCount];
         for (int id = 0; id < OriginalCellCount; id++)
         {
-            TopologySourceCell original = source[id];
-            // The only necessary old-graph change is the former closing edge
-            // 31->0 becoming 31->32. All old cell identity/economy stays native.
-            cells[id] = new TopologyCellPlan(id, id, id / CellsPerSide, original.LineId,
-                id + 1, original.Kind, original.NativeSuitId, original.DecorationId,
+            int templateId = OriginalTemplateCellId(id);
+            TopologySourceCell template = source[templateId];
+            // Replace service cells through full native templates, keeping
+            // original ownables and destination IDs/lines unchanged.
+            TopologyCellKind kind = id == FirstTrapCellId ? TopologyCellKind.RogueTrap : template.Kind;
+            cells[id] = new TopologyCellPlan(id, templateId, id / CellsPerSide, source[id].LineId,
+                id + 1, kind, template.NativeSuitId, template.DecorationId,
                 false, null);
         }
 
-        // Clone side two's complete native templates, but replace the new
-        // corner with Chance and reserve two NEW cities as traps. This avoids
-        // removing any original city or duplicating Start/lap rewards.
-        int[] templates = { 12, 9, 10, 11, 12, 13, 14, 15 };
+        // Trap12/32, Island8/28 and Tax16/36 each span half a lap.
+        // Chance20/30/39 have circular gaps10/9/21. Native Island, Tax,
+        // Tournament and Travel settings remain those of their source cells.
+        int[] templates = { 12, 9, 10, 11, 30, 16, 14, 12 };
         TopologyCellKind[] kinds =
         {
-            TopologyCellKind.Chance, TopologyCellKind.City, TopologyCellKind.City, TopologyCellKind.City,
-            TopologyCellKind.Chance, TopologyCellKind.RogueTrap, TopologyCellKind.Resort, TopologyCellKind.RogueTrap
+            TopologyCellKind.RogueTrap, TopologyCellKind.City, TopologyCellKind.City, TopologyCellKind.City,
+            TopologyCellKind.Tax, TopologyCellKind.Tournament, TopologyCellKind.Resort, TopologyCellKind.Chance
         };
         for (int offset = 0; offset < CellsPerSide; offset++)
         {
@@ -59,8 +105,8 @@ internal static class FivePlayerTopologyRules
             TopologyCellKind kind = kinds[offset];
             bool city = kind == TopologyCellKind.City;
             bool trap = kind == TopologyCellKind.RogueTrap;
-            // Null is deliberate: reusing Suit30 would enlarge an old city
-            // monopoly, while an unreviewed numeric Suit90 could miss skins.
+            // Null deliberately requires ResolveNativeSuit's audited art gate;
+            // using Suit30 directly would enlarge an old city monopoly.
             int? nativeSuit = city ? null : trap ? 1 : template.NativeSuitId;
             int decoration = trap ? 1 : template.DecorationId;
             cells[id] = new TopologyCellPlan(id, templates[offset], ExpandedSideCount - 1,
@@ -188,7 +234,8 @@ internal sealed class TopologyExpansionPlan
             "Audit and add map-specific asset/skin lookup for the new city suit; do not change its gameplay grouping.",
             "Audit native 40-cell placement, fixed cell-count assumptions, travel/card references and synchronization.",
             "Verify five-resort rent tiers, purchase/info UI and all monopoly/line victory checks.",
-            "Approve or redesign two traps on the added side; this is a candidate, not final random placement."
+            "Verify trap, Island and Tax pairs stay twenty native graph steps apart and Chance gaps remain at least nine cells in live gameplay.",
+            "Verify complete native Island/Tax/Tournament/Travel effects; their replacement templates must not receive trap settings."
         });
     }
 
@@ -197,5 +244,5 @@ internal sealed class TopologyExpansionPlan
     internal bool IsRuntimeReady => false;
 
     internal void RequireRuntimeReady() => throw new InvalidOperationException(
-        "This is an unwired topology candidate. Native city-suit/asset compatibility and complete native configuration cloning are unresolved.");
+        "Pure topology tests cannot authorize runtime materialization. Use the native adapter's complete-clone, artwork and economy checks, then validate live gameplay.");
 }

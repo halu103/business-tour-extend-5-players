@@ -1,4 +1,4 @@
-# Unwired five-player topology candidate
+# Five-player topology planning and native adapter
 
 Run the pure tests with:
 
@@ -7,8 +7,11 @@ Run the pure tests with:
 ```
 
 This test project does not load Unity/IL2CPP, change the installed mod, or claim
-that the game can already play a 40-cell map. `IsRuntimeReady` is deliberately
-false, and the runtime-materialization guard always rejects the candidate.
+that the game can already play a 40-cell map. The pure candidate's
+`IsRuntimeReady` is deliberately false, and its materialization guard always
+rejects direct use. A separate native adapter is wired in the development
+source, with native validation required before committing its array. Pure
+tests do not establish that the expanded game is playable.
 
 ## Baseline evidence
 
@@ -52,24 +55,44 @@ contains only identity and graph metadata and cannot replace that clone.
 
 | New ID | Full native template to clone | Planned role |
 | ---: | ---: | --- |
-| 32 | 12 | Corner Chance |
+| 32 | 12 | RogueTrap, opposite trap 12 |
 | 33 | 9 | New city, independent three-city group |
 | 34 | 10 | New city, same new group |
 | 35 | 11 | New city, same new group |
-| 36 | 12 | Chance |
-| 37 | 13 | Convert only this new clone to RogueTrap |
+| 36 | 30 | Second native Tax, opposite Tax 16 |
+| 37 | 16 | Original native Tournament relocated intact |
 | 38 | 14 | Fifth resort, valid existing suit 3 / decoration 11 |
-| 39 | 15 | Convert only this new clone to RogueTrap |
+| 39 | 12 | Native Chance |
 
-All 32 original kinds, native suits, decorations and line IDs remain unchanged.
-The only old graph edit is `31 -> 0` becoming `31 -> 32`; new ID 39 closes to
-0. There are five logical lines with eight cells each. No additional Start,
-Island, Tournament, Tax or TravelNextTurn is created. Traps belong only to new
-clones, so no existing ownable city group is sacrificed.
+The approved service revision permits exactly these original-prefix changes:
 
-The candidate has five resorts, 23 cities, five Chance cells and two traps.
-Placing both traps on the added side is a **candidate**, not a finished random
-trap-distribution definition.
+| Destination ID | Original role | Full native template | New role |
+| ---: | --- | ---: | --- |
+| 12 | Chance | 12 | RogueTrap |
+| 16 | Tournament | 30 | Native Tax |
+| 28 | Chance | 8 | Native Island |
+| 30 | Tax | 12 | Native Chance |
+
+Every other original template and role is retained. All original destination
+IDs and line IDs stay fixed. Every one of the 20 original cities and four
+resorts keeps its exact position, suit, decoration and complete economy
+template. The only old graph edit is `31 -> 0` becoming `31 -> 32`; new ID 39
+closes to 0. There are five logical lines with eight cells each. Start 0 and
+TravelNextTurn 24 stay intact; Tournament is moved to 37. Both traps derive
+from complete native Chance 12 clones, so no existing ownable group is sacrificed.
+
+The exact inventory is 3 Chance, 2 Island, 2 Tax, 5 Resort, 23 City, 2 RogueTrap,
+1 Start, 1 Tournament and 1 TravelNextTurn, totaling 40 cells. Island 8/28,
+Tax 16/36 and RogueTrap 12/32 are each twenty graph steps apart in either
+direction. Chance 20/30/39 have circular gaps 10/9/21, including the last-to-first
+gap; the minimum gap is nine, but they are not evenly spaced. Services keep
+their complete native effect settings. Island, Tax, Tournament and Travel
+receive no custom trap duration/release-cost settings. Traps are fixed; only
+the five region skins are seeded. A regular pentagon is not centrally
+symmetric: equally spaced tile centers are not exact antipodes. The trap pair is
+among the closest available visually opposite half-ring pairs (approximately
+178.4 degrees on a regular-pentagon model), tested for both traversal windings.
+It is not a claim of an exact diameter or of balanced chance-card frequency.
 
 ## Concrete blockers before runtime use
 
@@ -78,9 +101,10 @@ suit would enlarge that old monopoly and alter its completion requirement.
 The planner therefore records their native suit as unresolved rather than
 casting an unsupported enum value.
 
-An auditable proposal is a new map-specific gameplay suit value 90 with a
+The development source uses a new map-specific gameplay suit value 90 with a
 render-only alias to an existing city skin and a supported native city
-decoration. This is not implemented or validated. The actual Classic
+decoration. Two scoped native lookup patches implement this artwork fallback;
+loaded native aliases must pass preflight, and live rendering remains unverified. The actual Classic
 `CellSkinConfig` has city lookups only for suits 10–80, and native
 `CellSkinConfig.GetSkinName`, token `0x06006B19`, returns null on a missing
 type/suit lookup. Any alias must cover the relevant skin/config consumers,
@@ -90,10 +114,47 @@ suit 90 to an existing suit, and must not treat resorts as cities.
 Native `CellViewFactory.GetCellPreinitData`, token `0x06006D17`, explicitly
 divides `cellsCount` by four when routing cell placement. Passing 40 cells
 therefore gives four groups of ten before any custom presentation, not five
-groups of eight. Cell/corner creation and placement must be audited and
-adapted before this candidate can be wired into the game.
+groups of eight. Audited MapView/CellViewFactory bodies accept actual cell count
+and select prefabs by type/suit/skin, not ordinal corners. Canonical presentation
+remaps that square staging into the pentagon; no non-blittable placement hook
+was added. Actual reference fitting, pawn placement and labels need live tests.
 
 Other outstanding checks include full native clone serialization, fixed
 cell-count assumptions, card/travel references, resort tier UI, group/line
 victory predicates, deterministic synchronization between clients and
 unchanged ordinary four-player maps.
+
+## Native adapter preparation
+
+`NativeFivePlayerMapTopology.Prepare` prepares all 40 cells off-map and leaves
+the source untouched. It mirrors native `MapConfig.CreateCopy`: full
+`CellData` round-trip through the game's `JsonParser`, then a new `RawCellData`
+wrapper with the template metadata. The game uses this parser rather than
+Unity's `JsonUtility` for this operation.
+
+The adapter requires the caller to establish the map-specific expansion-city
+asset alias before assigning gameplay suit 90. It verifies strict Classic
+inventory, independent cloned objects, all original ownables pinned to their
+complete original templates, and only the explicitly approved service-prefix
+replacements. Preserved template name/localization keys,
+consistent resort economy and five tiers from the real native resort-level
+calculation are validated too. All 40 prepared cells are compared with separate
+complete native clones of their selected templates. Only destination ID,
+line, next edge, appended-city suit 90 and the exact approved trap transition
+are normalized on those expected clones. The prepared cells and source arrays
+are never temporarily edited for this comparison. Raw editor metadata is
+checked against the selected template, including relocated native services.
+Thus tax/tournament/travel/control settings, rewards and all other serialized
+native effect fields remain covered by the full serialization check.
+Exact inventory, half-ring paired-service separation and circular Chance gaps
+are asserted before commit. `Apply` performs a single final array assignment after preparation;
+an enclosing generation transaction can use `Prepare` and commit later.
+
+These adapter checks are native runtime assertions, not results of this pure
+test project. The adapter has no placement or skin patch hooks of its own, and
+the existing blockers still require integration. Reused city/resort template
+names are deliberately preserved rather than inventing localization entries.
+
+The pure suite also embeds the native adapter source and checks these cloning,
+field-preservation and validation contracts. These source checks are not an
+execution of IL2CPP, and cannot prove live card outcomes or Island/Tax effects.

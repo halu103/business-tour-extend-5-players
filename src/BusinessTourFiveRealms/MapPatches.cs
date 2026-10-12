@@ -120,7 +120,8 @@ internal static class MapCollectionDefinitionsPatch
             {
                 ModState.SpecialDefinition = definition;
             }
-            else if (ModState.Template == null && !string.IsNullOrWhiteSpace(definition.Map))
+            else if (ModState.Template == null &&
+                string.Equals(definition.Map, "ClassicMap", StringComparison.Ordinal))
             {
                 ModState.Template = definition;
             }
@@ -162,7 +163,7 @@ internal static class MapCollectionDefinitionsPatch
         {
             // Keep resource-facing map identifiers vanilla. Appending our
             // marker here makes Map.Initialize request a non-existent config
-            // such as ClassicMap::BT5P1, so neither board nor gameplay UI is
+            // such as ClassicMap::BT5P2, so neither board nor gameplay UI is
             // created. The mode is synchronized via a Photon room property.
             _Map_k__BackingField = template.Map,
             _Cards_k__BackingField = template.Cards,

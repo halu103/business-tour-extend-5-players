@@ -17,8 +17,8 @@ public sealed class Plugin : BasePlugin
 {
     public const string Guid = "vn.businesstour.fiverealms";
     public const string Name = "Business Tour Five Realms";
-    public const string Version = "0.2.0";
-    public const string ReleaseVersion = "0.2.0-preview.2";
+    public const string Version = "0.2.2";
+    public const string ReleaseVersion = "0.2.2";
 
     internal static ManualLogSource ModLog { get; private set; } = null!;
     internal static ConfigEntry<bool> PreventAfkKick { get; private set; } = null!;
@@ -149,6 +149,8 @@ internal static class PatchBootstrap
         typeof(PentagonalBoardPatch)
 #else
         typeof(AfkHandlerPatch),
+        typeof(AfkCallbackFactoryPatch),
+        typeof(AfkCallbackReleasePatch),
         typeof(ConnectionHandlerPatch),
         typeof(MapCollectionDefinitionsPatch),
         typeof(SpecialMapPreviewPatch),
@@ -177,6 +179,9 @@ internal static class PatchBootstrap
         typeof(FivePlayerHudReleasePatch),
         typeof(FivePlayerInventoryLayoutPatch),
         typeof(FivePlayerInventoryBackgroundPatch),
+        typeof(FivePlayerMovingMoneyScalePatch),
+        typeof(FivePlayerResortCaptionPatch),
+        typeof(FivePlayerSmilesPositionPatch),
         typeof(FivePlayerPanelFactoryPatch),
         typeof(FivePlayerPauseReleasePatch),
         typeof(FivePlayerReplaySeedPatch),
@@ -185,6 +190,8 @@ internal static class PatchBootstrap
         typeof(CompositeMapResourceLoadPatch),
         typeof(CompositeMapLocationLoadPatch),
         typeof(CompositeMapVisualConfigPatch),
+        typeof(FivePlayerCitySkinNamePatch),
+        typeof(FivePlayerCityCatalogSkinNamePatch),
         typeof(PentagonalBoardPatch),
         typeof(PentagonalBackgroundPatch),
         typeof(PentagonalSpriteSyncPatch)
@@ -199,6 +206,7 @@ internal static class PatchBootstrap
             try
             {
                 harmony.CreateClassProcessor(patchType).Patch();
+                FivePlayerCitySkinSupport.MarkPatchInstalled(patchType);
             }
             catch (Exception ex)
             {

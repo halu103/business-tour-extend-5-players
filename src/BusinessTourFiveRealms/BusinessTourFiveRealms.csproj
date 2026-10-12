@@ -3,9 +3,9 @@
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>BusinessTourFiveRealms</AssemblyName>
     <RootNamespace>BusinessTourFiveRealms</RootNamespace>
-    <Version>0.2.0-preview.2</Version>
-    <AssemblyVersion>0.2.0.0</AssemblyVersion>
-    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.2.2</Version>
+    <AssemblyVersion>0.2.2.0</AssemblyVersion>
+    <FileVersion>0.2.2.0</FileVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <LangVersion>10.0</LangVersion>
     <Nullable>disable</Nullable>
@@ -24,6 +24,7 @@
     <Reference Include="Il2CppInterop.Runtime" HintPath="$(BepInExRoot)\core\Il2CppInterop.Runtime.dll" Private="false" />
     <Reference Include="Il2Cppmscorlib" HintPath="$(InteropDir)\Il2Cppmscorlib.dll" Private="false" />
     <Reference Include="Assembly-CSharp" HintPath="$(InteropDir)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="GAF" HintPath="$(InteropDir)\GAF.dll" Private="false" />
     <Reference Include="ACTk.Runtime" HintPath="$(InteropDir)\ACTk.Runtime.dll" Private="false" />
     <Reference Include="PhotonRealtime" HintPath="$(InteropDir)\PhotonRealtime.dll" Private="false" />
     <Reference Include="Photon3Unity3D" HintPath="$(InteropDir)\Photon3Unity3D.dll" Private="false" />

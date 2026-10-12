@@ -60,10 +60,16 @@ internal static class FivePlayerHud
         }
 
         EnsureSeatMapping();
-        if (Layouts.ContainsKey(hud.Pointer))
+        if (Layouts.TryGetValue(hud.Pointer, out LayoutState existing))
         {
-            Reflow(hud);
-            return;
+            if (existing.Owns(hud))
+            {
+                Reflow(hud);
+                return;
+            }
+            // Unity can recycle the native pointer after scene cleanup. A
+            // previous generation must not suppress this prefab's expansion.
+            Layouts.Remove(hud.Pointer);
         }
 
         LayoutState state = null;
@@ -85,7 +91,7 @@ internal static class FivePlayerHud
                 }
             }
 
-            state = new LayoutState(current, hud._placesOfPlayers);
+            state = new LayoutState(hud, current, hud._placesOfPlayers);
             // Extract the actual global controls before cloning any subtree.
             // A prefab variant can nest them inside the left player's root;
             // cloning first would leave five unbound copies of those controls.
@@ -208,7 +214,8 @@ internal static class FivePlayerHud
     internal static void Reflow(UIGameHUD hud)
     {
         if (!ModState.IsSpecialMapActive || hud == null ||
-            !Layouts.TryGetValue(hud.Pointer, out LayoutState state) || state.Column == null) return;
+            !Layouts.TryGetValue(hud.Pointer, out LayoutState state) ||
+            !state.Owns(hud) || state.Column == null) return;
         try
         {
             RectTransform column = state.Column.transform.TryCast<RectTransform>();
@@ -303,10 +310,13 @@ internal static class FivePlayerHud
         {
             rect.anchorMin = new Vector2(0.5f, 0.5f);
             rect.anchorMax = new Vector2(0.5f, 0.5f);
-            rect.pivot = new Vector2(0.5f, 1f);
-            rect.anchoredPosition = new Vector2(0f, -52f);
+            // Vertical actions sit against the right screen edge. Hints must
+            // open inward, not below the button where they overlap the next
+            // action (or beyond the viewport when a translation is long).
+            rect.pivot = new Vector2(1f, 0.5f);
+            rect.anchoredPosition = new Vector2(-52f, 0f);
         }
-        else hint.transform.localPosition = new Vector3(0f, -52f, 0f);
+        else hint.transform.localPosition = new Vector3(-52f, 0f, 0f);
     }
 
     private static void AddToolbarControl(LayoutState state, Transform root, Transform bounds,
@@ -357,10 +367,11 @@ internal static class FivePlayerHud
             float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
             IncludeBounds(control.Bounds, column, ref left, ref top, ref right, ref bottom);
             if (float.IsInfinity(right) || float.IsInfinity(top)) continue;
-            // Pause is the rightmost action; preserve room beneath the toolbar
-            // for the board instead of stacking icons above the local avatar.
-            Vector3 delta = new Vector3(column.rect.xMax - 24f - index * 80f - right,
-                column.rect.yMax - 28f - top, 0f);
+            // One inward-facing vertical rail: Pause, Zoom, Emotes, Store,
+            // Basket. Keep native controls and bindings, never clone buttons.
+            float step = GameplayHudLayoutRules.ToolbarStep(column.rect.height, state.Controls.Count);
+            Vector3 delta = new Vector3(column.rect.xMax - 24f - right,
+                column.rect.yMax - 28f - index * step - top, 0f);
             control.Root.position += column.TransformVector(delta);
             if (!state.ToolbarLogged)
                 Plugin.ModLog.LogInfo($"HUD toolbar fitted {control.Root.name}: active={control.Root.gameObject.activeSelf}/{control.Root.gameObject.activeInHierarchy}, graphicActive={control.Bounds.gameObject.activeSelf}/{control.Bounds.gameObject.activeInHierarchy}, size={right-left:F1}x{top-bottom:F1}, scale={control.Root.localScale.x:F3}.");
@@ -383,6 +394,7 @@ internal static class FivePlayerHud
             }
         }
 
+        FivePlayerGameplayEffects.Reset();
         foreach (InventoryState inventory in Inventories.Values)
         {
             try { inventory.Restore(); }
@@ -401,6 +413,42 @@ internal static class FivePlayerHud
             catch (Exception ex) { Plugin.ModLog.LogDebug($"Pause objects were already released: {ex.Message}"); }
         }
         Pauses.Clear();
+    }
+
+    internal static bool OwnsInventory(UIGameInventory inventory) =>
+        inventory != null && Inventories.TryGetValue(inventory.Pointer, out InventoryState state) &&
+        state.Owns(inventory);
+
+    internal static float MoneyDestinationScale(UIGameInventory inventory, Transform destination) =>
+        inventory != null && Inventories.TryGetValue(inventory.Pointer, out InventoryState state) &&
+        state.Owns(inventory) ? state.DestinationScale(destination) : 1f;
+
+    internal static void Reset()
+    {
+        foreach (LayoutState state in new List<LayoutState>(Layouts.Values))
+            Release(state.Hud);
+        // Release cannot read a destroyed Unity HUD (fake-null), but its
+        // pointer entry must not survive into a later scene generation.
+        Layouts.Clear();
+        // Also cover a partial initialization that created an inventory before
+        // HUD registration, without touching any vanilla four-player view.
+        Release(null);
+    }
+
+    internal static void ReflowGameplayActive()
+    {
+        if (!ModState.IsSpecialMapActive) return;
+        foreach (LayoutState state in new List<LayoutState>(Layouts.Values))
+        {
+            try
+            {
+                if (state.Hud != null && state.Hud.gameObject.activeInHierarchy &&
+                    state.Hud._sortedPlayersView?.Pointer == state.ExpandedViews?.Pointer)
+                    Reflow(state.Hud);
+            }
+            catch (Exception ex) { Plugin.ModLog.LogDebug($"Gameplay toolbar was already released: {ex.Message}"); }
+        }
+        FivePlayerGameplayEffects.ReflowPopups();
     }
 
     internal static void PrepareFactory(GameplayPlayerPanelFactory factory,
@@ -690,7 +738,8 @@ internal static class FivePlayerHud
                 }
                 state.Save(money[index]);
                 state.Save(cards[index].transform);
-                PositionWorldRow(money[index], index, 0.168f);
+                if (PositionWorldRow(money[index], index, 0.168f))
+                    state.MarkMoneyRowScaled(money[index]);
                 PositionWorldRow(cards[index].transform, index, 0.164f);
             }
 
@@ -737,6 +786,7 @@ internal static class FivePlayerHud
             view._moneyPlaceholders = money;
             view._cards = cards;
             if (expandedGroups != null) view._cellOwnshipIndicators = expandedGroups;
+            state.EnlargeCenterMoney();
             Inventories.Add(view.Pointer, state);
             Plugin.ModLog.LogInfo($"Gameplay inventory prepared five money/card slots and {groups?.Length ?? 0} five-player ownership indicator groups.");
         }
@@ -767,17 +817,11 @@ internal static class FivePlayerHud
             }
             if (Inventories.TryGetValue(controller._view.Pointer, out InventoryState state))
             {
-                // Money amount and transfer animations still run through the
-                // original IMoneyInventory objects. Only their decorative GAF
-                // roots are smaller; the native HUD text remains full-sized.
+                // Compact only the stationary piles in the left rail. Native
+                // transfer templates must not inherit this reduction; the
+                // transfer-scale hook compensates a tracked compact target.
                 if (controller._view._playerMoney != null)
                     foreach (IMoneyInventory money in controller._view._playerMoney.Values)
-                        state.CompactMoney(money);
-                if (controller._view._playerMovingMoney != null)
-                    foreach (IMoneyInventory money in controller._view._playerMovingMoney.Values)
-                        state.CompactMoney(money);
-                if (controller._view._movingMoneyCollection != null)
-                    foreach (IMoneyInventory money in controller._view._movingMoneyCollection.Values)
                         state.CompactMoney(money);
             }
         }
@@ -815,17 +859,19 @@ internal static class FivePlayerHud
         }
     }
 
-    private static void PositionWorldRow(Transform transform, int index, float x)
+    private static bool PositionWorldRow(Transform transform, int index, float x)
     {
         Camera camera = Camera.main;
-        if (camera == null || !camera.orthographic) return;
+        if (camera == null || !camera.orthographic) return false;
         Vector3 original = transform.position;
         float depth = Vector3.Dot(original - camera.transform.position, camera.transform.forward);
         Vector3 position = camera.ViewportToWorldPoint(new Vector3(x, 0.82f - index * 0.14f, depth));
         position.z = original.z;
         transform.position = position;
         Vector3 scale = transform.localScale;
-        transform.localScale = new Vector3(scale.x * 0.62f, scale.y * 0.62f, scale.z);
+        transform.localScale = new Vector3(scale.x * GameplayHudLayoutRules.WorldRowScale,
+            scale.y * GameplayHudLayoutRules.WorldRowScale, scale.z);
+        return true;
     }
 
     private static int FindLeftPanel(Il2CppReferenceArray<PlayerView> views)
@@ -867,6 +913,8 @@ internal static class FivePlayerHud
 
     private sealed class LayoutState
     {
+        internal readonly UIGameHUD Hud;
+        private readonly int _instanceId;
         internal readonly Il2CppReferenceArray<PlayerView> Views;
         internal readonly Il2CppReferenceArray<Transform> Places;
         private readonly PlayerViewPositionType[] _positionTypes;
@@ -882,8 +930,10 @@ internal static class FivePlayerHud
         internal float RowHeight;
         internal bool ToolbarLogged;
 
-        internal LayoutState(Il2CppReferenceArray<PlayerView> views, Il2CppReferenceArray<Transform> places)
+        internal LayoutState(UIGameHUD hud, Il2CppReferenceArray<PlayerView> views, Il2CppReferenceArray<Transform> places)
         {
+            Hud = hud;
+            _instanceId = hud.GetInstanceID();
             Views = views;
             Places = places;
             _positionTypes = new PlayerViewPositionType[views.Length];
@@ -897,11 +947,16 @@ internal static class FivePlayerHud
 
         internal void Save(Transform transform) => Transforms.Add(new TransformState(transform));
 
+        internal bool Owns(UIGameHUD hud) => Hud != null && hud != null &&
+            hud.Pointer == Hud.Pointer && hud.GetInstanceID() == _instanceId;
+
         internal void Restore(UIGameHUD hud)
         {
-            foreach (TransformState transform in Transforms)
+            // Each move changes later siblings' indices. Undo the moves in
+            // reverse order so the native horizontal toolbar order is exact.
+            for (int index = Transforms.Count - 1; index >= 0; index--)
             {
-                try { transform.Restore(); }
+                try { Transforms[index].Restore(); }
                 catch (Exception ex) { Plugin.ModLog.LogDebug($"HUD transform already released: {ex.Message}"); }
             }
             try
@@ -1033,12 +1088,29 @@ internal static class FivePlayerHud
     private sealed class InventoryState : ClonedViewState
     {
         private readonly UIGameInventory _view;
+        private readonly int _instanceId;
+        private CenterMoneyTextState _centerMoney;
         internal Il2CppReferenceArray<Transform> Money;
         internal Il2CppReferenceArray<CardInventory> Cards;
         internal Il2CppReferenceArray<CellsOwnshipIndicator.InitParams> Ownership;
         private readonly HashSet<IntPtr> _compactMoney = new();
+        private readonly HashSet<IntPtr> _scaledMoneyRows = new();
 
-        internal InventoryState(UIGameInventory view) => _view = view;
+        internal InventoryState(UIGameInventory view)
+        {
+            _view = view;
+            _instanceId = view.GetInstanceID();
+        }
+
+        internal bool Owns(UIGameInventory view) =>
+            _view != null && view.Pointer == _view.Pointer && view.GetInstanceID() == _instanceId;
+
+        internal void EnlargeCenterMoney()
+        {
+            if (_view._centerMoneyText == null) return;
+            _centerMoney = new CenterMoneyTextState(_view._centerMoneyText);
+            _centerMoney.Apply();
+        }
 
         internal void CompactMoney(IMoneyInventory money)
         {
@@ -1046,11 +1118,23 @@ internal static class FivePlayerHud
             if (root == null || !_compactMoney.Add(root.Pointer)) return;
             Save(root.transform);
             Vector3 scale = root.transform.localScale;
-            root.transform.localScale = new Vector3(scale.x * 0.32f, scale.y * 0.32f, scale.z);
+            root.transform.localScale = new Vector3(scale.x * GameplayHudLayoutRules.StationaryMoneyScale,
+                scale.y * GameplayHudLayoutRules.StationaryMoneyScale, scale.z);
+        }
+
+        internal void MarkMoneyRowScaled(Transform row) => _scaledMoneyRows.Add(row.Pointer);
+
+        internal float DestinationScale(Transform destination)
+        {
+            if (destination == null || !_compactMoney.Contains(destination.gameObject.Pointer)) return 1f;
+            bool scaledParent = destination.parent != null && _scaledMoneyRows.Contains(destination.parent.Pointer);
+            return GameplayHudLayoutRules.StationaryMoneyScale *
+                (scaledParent ? GameplayHudLayoutRules.WorldRowScale : 1f);
         }
 
         internal void Restore()
         {
+            _centerMoney?.Restore();
             if (_view != null)
             {
                 _view._moneyPlaceholders = Money;
@@ -1058,6 +1142,46 @@ internal static class FivePlayerHud
                 _view._cellOwnshipIndicators = Ownership;
             }
             RestoreObjects();
+        }
+    }
+
+    private sealed class CenterMoneyTextState
+    {
+        private readonly UnityEngine.UI.Text _text;
+        private readonly int _instanceId;
+        private readonly int _fontSize;
+        private readonly int _maximum;
+        private readonly bool _bestFit;
+        private readonly int _assignedFontSize;
+        private readonly int _assignedMaximum;
+
+        internal CenterMoneyTextState(UnityEngine.UI.Text text)
+        {
+            _text = text;
+            _instanceId = text.GetInstanceID();
+            _fontSize = text.fontSize;
+            _maximum = text.resizeTextMaxSize;
+            _bestFit = text.resizeTextForBestFit;
+            _assignedFontSize = GameplayHudLayoutRules.MoneyFontSize(_fontSize);
+            _assignedMaximum = GameplayHudLayoutRules.MoneyFontSize(_maximum);
+        }
+
+        internal void Apply()
+        {
+            // This native text has a zero-sized RectTransform whose layout
+            // components determine preferred bounds. Do not assign sizeDelta
+            // or scale its parent: changing the font expands those bounds and
+            // leaves native value/fade tweens, timing and positioning intact.
+            _text.fontSize = _assignedFontSize;
+            if (_bestFit) _text.resizeTextMaxSize = _assignedMaximum;
+        }
+
+        internal void Restore()
+        {
+            if (_text == null || _text.GetInstanceID() != _instanceId) return;
+            if (_text.fontSize == _assignedFontSize) _text.fontSize = _fontSize;
+            if (_bestFit && _text.resizeTextMaxSize == _assignedMaximum)
+                _text.resizeTextMaxSize = _maximum;
         }
     }
 

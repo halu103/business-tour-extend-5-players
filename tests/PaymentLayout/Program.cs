@@ -1,4 +1,5 @@
 using BusinessTourFiveRealms;
+using System.Reflection;
 
 int checks = 0;
 void Equal(float actual, float expected, string name)
@@ -73,4 +74,55 @@ foreach (float pivotFraction in new[] { 0f, .25f, .5f, .75f, 1f })
         throw new InvalidOperationException("Enlarged dialog exceeded its padded viewport.");
 }
 
-Console.WriteLine($"PASS: {checks} payment-dialog and font sizing checks; native oversized layouts remain unchanged.");
+// The previous resize inserted a wrapper and rewrote the native animated
+// window's anchors. Keep a structural regression guard alongside the pure
+// sizing tests: this helper may change bounded font settings, never purchase
+// hierarchy, dimensions, button positions, or the native scale tween.
+using var paymentSource = Assembly.GetExecutingAssembly().GetManifestResourceStream("NativePaymentUiSource.cs")
+    ?? throw new InvalidOperationException("Missing payment UI source regression fixture.");
+using var paymentReader = new StreamReader(paymentSource);
+string paymentUiSource = paymentReader.ReadToEnd();
+foreach (string forbidden in new[]
+{
+    "new GameObject(", ".SetParent(", ".SetSiblingIndex(", ".anchorMin =", ".anchorMax =",
+    ".anchoredPosition3D =", ".localRotation =", ".localScale =", ".sizeDelta =", ".pivot ="
+})
+{
+    checks++;
+    if (paymentUiSource.Contains(forbidden, StringComparison.Ordinal))
+        throw new InvalidOperationException($"Payment helper must preserve native window geometry: {forbidden}");
+}
+checks++;
+if (!paymentUiSource.Contains("if (!ModState.IsSpecialMapActive) { Reset(); return; }", StringComparison.Ordinal))
+    throw new InvalidOperationException("Payment presentation must remain scoped to the five-player map.");
+
+using var resortSource = Assembly.GetExecutingAssembly().GetManifestResourceStream("NativeResortBindingsSource.cs")
+    ?? throw new InvalidOperationException("Missing resort binding regression fixture.");
+using var resortReader = new StreamReader(resortSource);
+string resortBindings = resortReader.ReadToEnd();
+foreach (string required in new[]
+{
+    "if (!ModState.IsSpecialMapActive) { Reset(); return; }", "view._buyButtonText == null", "view._rentText == null",
+    "FindNativeText(view, buyParent, \"Text\")", "FindNativeText(view, rentParent, \"Value\")",
+    "child.parent?.Pointer != parent.Pointer", "GetComponent<Text>()", "_view.GetInstanceID() == _viewId",
+    "_view._buyButtonText?.Pointer == _buy.Pointer", "_view._rentText?.Pointer == _rent.Pointer",
+    "view._buyButtonText != null && view._rentText != null",
+    "nameof(UIWindowBuyResortController.FillResortView)"
+})
+{
+    checks++;
+    if (!resortBindings.Contains(required, StringComparison.Ordinal))
+        throw new InvalidOperationException($"Native resort binding guard missing: {required}");
+}
+foreach (string forbidden in new[]
+{
+    "new GameObject(", ".SetParent(", ".localScale =", ".text =", ".SetPurchasePrice(",
+    ".SetRent(", "return false; // skip native", "HarmonyFinalizer", "typeof(UIExtensions)"
+})
+{
+    checks++;
+    if (resortBindings.Contains(forbidden, StringComparison.Ordinal))
+        throw new InvalidOperationException($"Resort binding must not replace native behavior: {forbidden}");
+}
+
+Console.WriteLine($"PASS: {checks} payment sizing and source-contract checks; purchase geometry is untouched, resort repair binds only existing native captions.");

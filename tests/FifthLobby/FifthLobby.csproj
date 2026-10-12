@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/BusinessTourFiveRealms/FifthLobbyPresentationRules.cs" Link="FifthLobbyPresentationRules.cs" />
+    <EmbeddedResource Include="../../src/BusinessTourFiveRealms/FifthLobbySlot.cs" LogicalName="NativeFifthLobbySource.cs" />
+  </ItemGroup>
+</Project>

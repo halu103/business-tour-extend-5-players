@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using BusinessTour;
 using HarmonyLib;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using Photon.Pun;
 
 namespace BusinessTourFiveRealms;
@@ -77,9 +78,19 @@ internal static class CompositeMapPatch
 
         try
         {
-            ApplyFiveRegions(map, BuildSeed());
+            // Prepare the complete 40-cell graph away from the resource being
+            // consumed. Native cloning, economy, artwork and skin selection
+            // must all pass before the only array write below.
+            uint seed = BuildSeed();
+            var prepared = NativeFivePlayerMapTopology.Prepare(map,
+                FivePlayerCitySkinSupport.IsReady,
+                Math.Max(1, Plugin.TrapDurationTurns.Value),
+                (uint)Math.Max(0, Plugin.TrapReleaseCost.Value));
+            ApplyFiveRegions(prepared, seed);
+            FivePlayerCitySkinSupport.ValidateAliases(prepared);
+            map._cellsArray = prepared;
             ProcessedMaps.Add(map.Pointer);
-            Plugin.ModLog.LogDebug($"Five Realms map data applied from {source}.");
+            Plugin.ModLog.LogInfo($"Five Realms V3 40-cell map data applied from {source}, seed=0x{seed:X8}, resorts=5, chance=3, islands=2, tax=2, traps=2.");
         }
         catch (Exception ex)
         {
@@ -87,21 +98,25 @@ internal static class CompositeMapPatch
         }
     }
 
-    private static void ApplyFiveRegions(MapConfig map, uint seed)
+    private static void ApplyFiveRegions(Il2CppReferenceArray<RawCellData> cells, uint seed)
     {
-        int cellCount = map._cellsArray.Length;
-        if (cellCount < 5)
-        {
-            return;
-        }
+        int cellCount = cells.Length;
+        if (cellCount != FivePlayerTopologyRules.ExpandedCellCount)
+            throw new InvalidOperationException("Five Realms V3 requires exactly forty cells.");
 
         int existingTraps = 0;
+        int firstTrapId = -1;
+        int lastTrapId = -1;
         for (int index = 0; index < cellCount; index++)
-            if (map._cellsArray[index]?._cellData?._cellType == CellType.RogueTrap) existingTraps++;
-        // Check before mutating the copy. Do not silently turn a native
-        // non-city cell into a city with incomplete city data.
-        if (existingTraps > FiveRealmsLayoutRules.MaximumTraps)
-            throw new InvalidOperationException("The base map exceeds the two-trap budget.");
+            if (cells[index]?._cellData?._cellType == CellType.RogueTrap)
+            {
+                if (existingTraps == 0) firstTrapId = index;
+                lastTrapId = index;
+                existingTraps++;
+            }
+        if (existingTraps != FiveRealmsLayoutRules.MaximumTraps ||
+            !FivePlayerTopologyRules.AreOppositeTrapCells(firstTrapId, lastTrapId, cellCount))
+            throw new InvalidOperationException("The expanded board must contain exactly two traps twenty graph cells apart.");
 
         var random = new StableRandom(seed);
         var regionSkins = new CellSkin[5];
@@ -116,52 +131,29 @@ internal static class CompositeMapPatch
             regionSkins[region] = candidate;
         }
 
-        var eligibleByRegion = new List<int>[5];
-        int[] regionStarts = FiveRealmsLayoutRules.RegionStarts(cellCount);
-        for (int region = 0; region < eligibleByRegion.Length; region++)
-        {
-            eligibleByRegion[region] = new List<int>();
-        }
+        int[] regionStarts = FivePlayerTopologyRules.RegionStarts();
 
         for (int index = 0; index < cellCount; index++)
         {
-            RawCellData raw = map._cellsArray[index];
+            RawCellData raw = cells[index];
             CellData data = raw?._cellData;
             if (data == null)
             {
-                continue;
+                throw new InvalidOperationException("Missing expanded cell data at " + index + ".");
             }
 
             int region = 0;
             while (region < FiveRealmsLayoutRules.RegionCount - 1 && index >= regionStarts[region + 1]) region++;
-            data._cellSkin = data._cellType == CellType.RogueTrap ? CellSkin.Fantasy : regionSkins[region];
-            if (index != 0 && data._cellType == CellType.City)
-            {
-                eligibleByRegion[region].Add(index);
-            }
-        }
-
-        int[] trapCells = FiveRealmsLayoutRules.SelectTrapCells(eligibleByRegion,
-            seed ^ 0x9E3779B9u, existingTraps);
-        foreach (int cellIndex in trapCells)
-        {
-            CellData data = map._cellsArray[cellIndex]._cellData;
-            // Use the native type transition rather than changing just the
-            // enum. In 2.21 this also assigns Service/NoBuilding, so an
-            // unbuyable trap is not left inside its former city monopoly suit.
-            // CellId, LineId and next-cell links are preserved by this method.
-            data.SetCellType(CellType.RogueTrap);
-            // RogueTrap's native card/prefab belongs to Fantasy. Retaining a
-            // Wonderland region skin asks its deck for a card it does not own.
-            data._cellSkin = CellSkin.Fantasy;
-            data._trapSettings = new TrapSettings(
-                Math.Max(1, Plugin.TrapDurationTurns.Value),
-                (uint)Math.Max(0, Plugin.TrapReleaseCost.Value));
+            // Regional themes lack exact overrides for some Classic services.
+            // Resolve only their artwork; retain the complete native service
+            // data instead of substituting another family of travel/tournament.
+            data._cellSkin = (CellSkin)FiveRealmsServiceArtRules.ResolveSkin(
+                (TopologyCellKind)data._cellType, (int)regionSkins[region]);
         }
 
         Plugin.ModLog.LogInfo(
-            $"Generated Five Realms seed=0x{seed:X8}, cells={cellCount}, traps={existingTraps + trapCells.Length}/2, " +
-            $"skins={string.Join("/", regionSkins)}.");
+            $"Prepared Five Realms seed=0x{seed:X8}, cells={cellCount}, traps={existingTraps}/2, " +
+            $"trapCells={firstTrapId}/{lastTrapId}, separation={cellCount / 2}, skins={string.Join("/", regionSkins)}.");
     }
 
     private static uint BuildSeed()

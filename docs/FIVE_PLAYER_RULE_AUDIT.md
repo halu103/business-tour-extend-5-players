@@ -1,14 +1,47 @@
 # Five-player rule and board audit
 
-Audit date: 2026-10-11. Target: Business Tour 2.21, local Steam installation.
+Audit updated: 2026-10-12. Target: Business Tour 2.21, local Steam installation.
+
+## Release0.2.0 / V3 update
+
+The current release uses40 cells:23 cities,5 resorts,3 Chance,2 Island,
+2 Tax,2 traps and1 each Start/Tournament/Travel. Trap12/32, Island8/28,
+Tax16/36 are20 route steps apart; Chance20/30/39 gaps are10/9/21.
+Native effect templates are cloned in full; the Chance deck is unchanged.
+Original ownables retain their position/economy/group. Some non-ownable
+services relocate:16←Tax30,28←Island8,30←Chance12,Tournament16→37.
+V3 marks this change separately from V2. The final redistribution, resort
+caption binding and Classic beach artwork were packaged without another
+live test, as requested. See[../RELEASE_NOTES.md](../RELEASE_NOTES.md).
+
+The remainder below is the historical preview.2/V2 audit, not the current
+inventory or final release verification status.
 
 ## Current scope
+
+The following 32-cell scope describes the published preview.2 archive, which
+has not been replaced. The preview.3 development source now includes the
+transactional `NativeFivePlayerMapTopology` adapter: all32 old cell settings
+are cloned intact except the closing graph edge and approved Chance12 trap
+conversion, eight cells are appended,
+and native clone/graph/skin/five-resort rent preflight precedes the sole array
+commit. Three added cities use independent gameplay suit90 with render-only
+suit30 aliases. Opposite traps12/32 use complete native Chance templates,
+not conversions of ownable cities. Former traps37/39 become Chance clones.
+The intended result is40 cells,23 cities,5 resorts,5 Chance and2 traps.
+The two traps are20 graph steps apart in either direction. A pentagon is not
+centrally symmetric; the selected tile centers are among the closest available
+visual opposites, not a mathematically exact180-degree pair. The placement is
+fixed, while region skins remain seeded. No original four-player map changes.
+Live materialization/payment/endgame testing remains required; compile success
+does not establish that this conversion is playable. See
+[NATIVE_40_RUNTIME_AUDIT.md](NATIVE_40_RUNTIME_AUDIT.md).
 
 The current Five Realms mode adds a fifth participant, five visual regions and
 a pentagonal board presentation. It still uses the native 32-cell board graph.
 Five visible sides do not yet mean five logical monopoly lines.
 
-**A fifth resort/beach has not been implemented.** Neither a 40-cell topology
+**A fifth resort/beach is not included in preview.2.** Neither a 40-cell topology
 nor a general "add one to every four-player rule" transformation is included.
 Ordinary four-player resources must remain unchanged.
 
@@ -56,9 +89,9 @@ the same preview version; do not mix preview.2 with `0.2.0-preview.1`.
 1. Capture the baseline native map inventory: cell types, suits, logical lines,
    IDs, links, prices, rents, rewards and control bonuses. Assert that ordinary
    four-player copies remain identical to this inventory.
-2. Specify the special-map topology and expected inventory explicitly. Five
-   eight-cell sides would yield 40 cells, but this is a possible design rather
-   than an automatic consequence of adding one resort.
+2. The user selected40 cells: five eight-cell sides. The development adapter
+   implements this inventory explicitly, not as an automatic blanket increment
+   of every four-player rule.
 3. Clone complete supported cell definitions. Assign unique IDs, next-cell
    links, logical lines and valid suit/decoration metadata. Do not initialize a
    resort by changing only its cell-type enum, and do not invent arbitrary

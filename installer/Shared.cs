@@ -309,7 +309,7 @@ namespace BusinessTourFiveRealmsInstaller
             string actual = Sha256(path);
             if (!String.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidDataException("Hash mismatch: " + path + Environment.NewLine +
+                throw new InvalidDataException("This file does not match the supported version: " + path + Environment.NewLine +
                     "Expected " + expected + Environment.NewLine + "Actual   " + actual);
             }
         }
@@ -519,10 +519,10 @@ namespace BusinessTourFiveRealmsInstaller
             if (!Directory.Exists(root) || !File.Exists(exe) ||
                 !Directory.Exists(Path.Combine(root, "BusinessTour_Data")))
             {
-                throw new InvalidDataException("This is not a Business Tour game root: " + root);
+                throw new InvalidDataException("This folder does not contain Business Tour: " + root);
             }
             PathSecurity.RejectReparsePoints(root, exe);
-            log("Game folder shape verified: " + root);
+            log("Business Tour game folder found: " + root);
         }
 
         internal static void ValidateExact(string gameRoot, Action<string> log)
@@ -872,7 +872,7 @@ namespace BusinessTourFiveRealmsInstaller
                     PathSecurity.PruneEmptyParents(gameRoot, destination);
                 }
             }
-            log("Rollback restored the pre-operation files.");
+            log("The previous files were restored.");
         }
     }
 

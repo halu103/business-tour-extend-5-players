@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.0-preview.2',
+    [string]$Version = '0.2.2',
     [string]$PreviousReleaseZip
 )
 
@@ -137,7 +137,10 @@ function Assert-ManagedInstall([bool]$ExpectedLoaderInstalled, [string]$Stage) {
     if ($informationalVersion -ne $Version) { throw "$Stage DLL informational version is $informationalVersion, expected $Version." }
     $modManifest = Get-Content -LiteralPath (Resolve-TestFile $modManifestRelative) -Raw | ConvertFrom-Json
     if ($modManifest.modId -ne $installed.ModId -or $modManifest.version -ne $Version -or
-        $modManifest.playerCount -ne 5 -or $modManifest.mapId -ne 'BT5_FIVE_REALMS_V1') {
+        $modManifest.playerCount -ne 5 -or $modManifest.mapId -ne 'BT5_FIVE_REALMS_V3' -or
+        $modManifest.chanceCellCount -ne 3 -or $modManifest.lostIslandCellCount -ne 2 -or
+        $modManifest.taxCellCount -ne 2 -or $modManifest.resortCellCount -ne 5 -or
+        $modManifest.boardCellCount -ne 40 -or -not $modManifest.fifthResortImplemented) {
         throw "$Stage mod manifest does not describe this five-player release."
     }
     Assert-GamePreserved

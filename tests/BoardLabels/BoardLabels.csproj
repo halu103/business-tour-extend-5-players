@@ -6,7 +6,10 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/BusinessTourFiveRealms/BoardLabelLayoutRules.cs" Link="BoardLabelLayoutRules.cs" />
+    <Compile Include="../../src/BusinessTourFiveRealms/BoardViewportLayoutRules.cs" Link="BoardViewportLayoutRules.cs" />
     <Compile Include="../../src/BusinessTourFiveRealms/CanonicalBoardGeometry.cs" Link="CanonicalBoardGeometry.cs" />
     <Compile Include="../../src/BusinessTourFiveRealms/FiveRealmsLayoutRules.cs" Link="FiveRealmsLayoutRules.cs" />
+    <EmbeddedResource Include="../../src/BusinessTourFiveRealms/BoardLabelPresentation.cs" LogicalName="NativeBoardLabelSource.cs" />
+    <EmbeddedResource Include="../../src/BusinessTourFiveRealms/CanonicalBoardPresentation.cs" LogicalName="NativeCanonicalBoardSource.cs" />
   </ItemGroup>
 </Project>

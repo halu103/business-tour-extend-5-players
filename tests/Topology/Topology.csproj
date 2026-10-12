@@ -7,5 +7,7 @@
   <ItemGroup>
     <Compile Include="../../src/BusinessTourFiveRealms/FivePlayerTopologyRules.cs" Link="FivePlayerTopologyRules.cs" />
     <Compile Include="../../src/BusinessTourFiveRealms/FiveRealmsLayoutRules.cs" Link="FiveRealmsLayoutRules.cs" />
+    <Compile Include="../../src/BusinessTourFiveRealms/CanonicalBoardGeometry.cs" Link="CanonicalBoardGeometry.cs" />
+    <EmbeddedResource Include="../../src/BusinessTourFiveRealms/NativeFivePlayerMapTopology.cs" LogicalName="NativeFivePlayerMapTopologySource.cs" />
   </ItemGroup>
 </Project>

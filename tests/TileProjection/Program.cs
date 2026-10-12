@@ -46,6 +46,41 @@ var quadrilaterals = new[]
     new[] { new Vector2(-1f, -3f), new Vector2(-3f, 3f), new Vector2(4f, 4f), new Vector2(3f, -1f) },
     new[] { new Vector2(17f, 11f), new Vector2(16f, 16f), new Vector2(21f, 16.5f), new Vector2(21f, 12f) }
 };
+int anchorChecks=0;
+foreach(var source in quadrilaterals)
+foreach(var target in quadrilaterals)
+foreach(bool reverseSource in new[]{false,true})
+foreach(bool reverseTarget in new[]{false,true})
+{
+    var s=reverseSource?ReverseNamed(source):source;
+    var t=reverseTarget?ReverseNamed(target):target;
+    foreach(float u in new[]{0f,.1f,.5f,.9f,1f})
+    foreach(float v in new[]{0f,.1f,.5f,.9f,1f})
+    foreach(float outer in new[]{0f,.6f})
+    {
+        Vector2 native=Evaluate(s,u,v);
+        Vector2 actual=CanonicalTileProjection.ProjectAnchor(s,t,native,.1f,outer);
+        Vector2 expected=Evaluate(t,Math.Clamp(u,.1f,.9f),Math.Clamp(v,Math.Max(.1f,outer),.9f));
+        Require(Vector2.Distance(actual,expected)<.00004f,
+            "upright artwork base maps through its own face while reserving the inner label band");
+        Require(Vector2.Distance(actual,CanonicalTileProjection.ProjectAnchor(s,t,native,.1f,outer))<1e-6f,
+            "anchor projection is baseline-based, deterministic and does not drift");
+        anchorChecks++;
+    }
+    foreach(Vector2 outsideAnchor in new[]{new Vector2(-100f,-100f),new Vector2(100f,100f),
+        new Vector2(-100f,100f),new Vector2(100f,-100f)})
+    {
+        Vector2 actual=CanonicalTileProjection.ProjectAnchor(s,t,outsideAnchor);
+        Vector2 uv=Invert(t,actual);
+        Require(uv.X>=.0999f && uv.X<=.9001f && uv.Y>=.0999f && uv.Y<=.9001f,
+            "external native effect anchors clamp inside their own face, not a neighboring tile");
+        anchorChecks++;
+    }
+}
+Reject(()=>CanonicalTileProjection.ProjectAnchor(square,square,new Vector2(float.NaN,0f)),"nonfinite anchor");
+Reject(()=>CanonicalTileProjection.ProjectAnchor(square,square,Vector2.Zero,.5f),"collapsed anchor margin");
+Reject(()=>CanonicalTileProjection.ProjectAnchor(square,square,Vector2.Zero,-.1f),"negative anchor margin");
+Reject(()=>CanonicalTileProjection.ProjectAnchor(square,square,Vector2.Zero,.1f,.95f),"building band beyond face");
 foreach (var source in quadrilaterals)
     foreach (var target in quadrilaterals)
         foreach (bool reverseSource in new[] { false, true })
@@ -153,7 +188,7 @@ Reject(() => CanonicalTileProjection.Project(square, square, square, packedUv, n
 RejectMutation(() => ((IList<Vector2>)full.Positions)[0] = Vector2.One, "read-only positions");
 RejectMutation(() => ((IList<Vector2>)full.UV)[0] = Vector2.One, "read-only UVs");
 
-Console.WriteLine($"PASS: {checkedMeshes} varying-face projections, full/trimmed/clipped/empty coverage, near-corner float slivers and aggregate loss budget, distant precision rejection, both windings, CCW triangles, interpolated original UV provenance, deterministic and invalid-input guards.");
+Console.WriteLine($"PASS: {checkedMeshes} varying-face projections, {anchorChecks} upright native artwork anchors within their own face/outer building band, full/trimmed/clipped/empty coverage, near-corner float slivers and aggregate loss budget, distant precision rejection, both windings, CCW triangles, interpolated original UV provenance, deterministic and invalid-input guards.");
 
 static void Check(CanonicalTileMesh mesh, IReadOnlyList<Vector2> target,
     IReadOnlyList<Vector2> originalPositions, IReadOnlyList<Vector2> originalUv, IReadOnlyList<int> originalTriangles)

@@ -9,7 +9,7 @@ namespace BusinessTourFiveRealms;
 
 // The board silhouette must come from one shared geometry, not the four
 // differently sized native corner sprites. Native textures are decoration on
-// these explicit tile surfaces; controllers and the 32-cell graph stay native.
+// these explicit tile surfaces; native controllers consume the expanded graph.
 internal static class CanonicalBoardPresentation
 {
     private static BoardState _current;
@@ -51,7 +51,9 @@ internal static class CanonicalBoardPresentation
                 (reference.Source[0].y-reference.Center.y)*(reference.Source[1].x-reference.Center.x);
             var geometry = CanonicalBoardGeometry.Create(
                 new NVector2(reference.Center.x, reference.Center.y), radiusX * 1.13f,
-                radiusY * 1.13f, cells.Count, Math.Sign(cross));
+                radiusY * 1.13f, cells.Count, Math.Sign(cross),
+                cells.Count==FivePlayerTopologyRules.ExpandedCellCount?
+                    BoardLabelLayoutRules.FivePlayerInnerScale:CanonicalBoardGeometry.DefaultInnerScale);
             float depth=0f;
             foreach(Vector3 point in centers) depth+=(reference.PlaneXY?point.z:point.y)/centers.Length;
             prepared = new BoardState(map, geometry, reference.PlaneXY, depth);
@@ -60,7 +62,7 @@ internal static class CanonicalBoardPresentation
                 Vector2 tangent = reference.Source[(index + 1) % cells.Count] -
                     reference.Source[(index + cells.Count - 1) % cells.Count];
                 var snapshot = new TileState(cells[index], faces[index], reference.Center, tangent,
-                    geometry.Cells[index], reference.PlaneXY);
+                    geometry.Cells[index], reference.PlaneXY,IsNativeChance(map,cells[index]));
                 prepared.Tiles.Add(snapshot);
             }
             // Validate every footprint/UV before changing the first native cell.
@@ -77,6 +79,14 @@ internal static class CanonicalBoardPresentation
             prepared?.Restore();
             Plugin.ModLog.LogError($"Canonical board failed safely; native presentation restored: {ex}");
         }
+    }
+
+    private static bool IsNativeChance(MapView map,CellView cell)
+    {
+        // Read the native model; the same art catalogue is also used by
+        // upright service prefabs and must not identify those by their names.
+        try { return map._locationManager?.Map?.MapConfig?.GetCellData(cell._cellId)?.CellType==CellType.Chance; }
+        catch { return false; }
     }
 
     private static Vector3[] ReadFace(CellView cell)
@@ -192,10 +202,9 @@ internal static class CanonicalBoardPresentation
                 left=Mathf.Min(left,local.x); right=Mathf.Max(right,local.x);
                 bottom=Mathf.Min(bottom,local.y); top=Mathf.Max(top,local.y);
             }
-            float size=Mathf.Max((right-left+1.4f)/(2f*camera.aspect*0.76f), (top-bottom+1.7f)/(2f*0.78f));
-            camera.transform.position += camera.transform.right * ((left+right)*0.5f-0.17f*size*camera.aspect) +
-                camera.transform.up * ((bottom+top)*0.5f+0.04f*size);
-            camera.orthographicSize=size;
+            OrthographicBoardFrame frame=BoardViewportLayoutRules.Fit(left,right,bottom,top,camera.aspect);
+            camera.transform.position += camera.transform.right * frame.Offset.X + camera.transform.up * frame.Offset.Y;
+            camera.orthographicSize=frame.Size;
             foreach(TileState tile in Tiles) tile.FitLabel(camera);
         }
 
@@ -266,13 +275,23 @@ internal static class CanonicalBoardPresentation
         private bool _flipX, _flipY;
         private readonly BoardLabelPresentation _label;
         private readonly BoardLabelPresentation _rentLabel;
+        private readonly List<ArtAnchor> _artAnchors=new();
+        private readonly HashSet<int> _discoveredArt=new();
+        private readonly bool _nativeChance;
+        private readonly int _cellInstanceId,_cellTransformId,_rendererId;
+        private readonly Vector3 _appliedRootPosition;
+        private bool _applied;
+        private float _nextArtRefresh;
+        private bool _artWarning;
 
         internal TileState(CellView cell,Vector3[] face,Vector2 boardCenter,Vector2 tangent,
-            CanonicalBoardCell target,bool planeXY)
+            CanonicalBoardCell target,bool planeXY,bool nativeChance)
         {
             _cell=cell; Renderer=cell._cellRenderer?._renderer;
             if(Renderer==null || Renderer.sprite==null)throw new InvalidOperationException("Missing native ground texture.");
             _rootPosition=cell.transform.position; _press=cell._pressCellStartPosition;
+            _nativeChance=nativeChance;_cellInstanceId=cell.GetInstanceID();
+            _cellTransformId=cell.transform.GetInstanceID();_rendererId=Renderer.GetInstanceID();
             _sourceMatrix=Renderer.transform.localToWorldMatrix; _forceOff=Renderer.forceRenderingOff;
             _planeXY=planeXY; _corners=cell._cornersArray; _slots=cell._slots;
             foreach(Vector3 point in face) _planeDepth+=(planeXY?point.z:point.y)/face.Length;
@@ -302,13 +321,130 @@ internal static class CanonicalBoardPresentation
             ProjectSprite(Renderer.sprite);
             FaceCoordinates(face[0]);
             _center=World(target.Center);
-            _label=new BoardLabelPresentation(cell._labelView,_targetQuad,planeXY,_planeDepth);
-            _rentLabel=new BoardLabelPresentation(cell._rentView,_targetQuad,planeXY,_planeDepth,.7f,1f);
+            Vector3 sourceCenter=Vector3.zero;foreach(Vector3 point in face)sourceCenter+=point*.25f;
+            _appliedRootPosition=_rootPosition+_center-sourceCenter;
+            // Native service prefabs have no rent view. Their localized
+            // captions can use the whole face instead of sharing the narrow
+            // ownable-cell name strip with a price they never display.
+            _label=new BoardLabelPresentation(cell._labelView,_targetQuad,planeXY,_planeDepth,
+                BoardLabelLayoutRules.NameInnerFraction,cell._rentView==null?
+                    BoardLabelLayoutRules.ServiceNameOuterFraction:BoardLabelLayoutRules.NameOuterFraction);
+            _rentLabel=new BoardLabelPresentation(cell._rentView,_targetQuad,planeXY,_planeDepth,
+                BoardLabelLayoutRules.RentInnerFraction,BoardLabelLayoutRules.RentOuterFraction,BoardLabelRole.Rent);
+            DiscoverArtwork();
+        }
+
+        private bool OwnsCell=>_cell!=null && Renderer!=null &&
+            _cell.GetInstanceID()==_cellInstanceId && _cell.transform.GetInstanceID()==_cellTransformId &&
+            Renderer.GetInstanceID()==_rendererId && _cell._cellRenderer?._renderer?.Pointer==Renderer.Pointer;
+
+        private void DiscoverArtwork()
+        {
+            _discoveredArt.Clear();
+            // Move only named native owners. GAF creates animated children
+            // later: fitting its owning clip keeps all those local offsets,
+            // rotations, scales and frame updates native.
+            CaptureArtAnchor(_cell._buildParent,.60f);
+            CaptureArtAnchor(_cell._festivalView?._movieClipFlags?._clip?.transform,centerBase:true);
+            CaptureArtAnchor(_cell._festivalView?._fireworks?._clip?.transform,centerBase:true);
+            CaptureArtAnchor(_cell._tournamentView?.transform,
+                planarImage:_nativeChance?_cell._tournamentView?._tournamentRenderer:null);
+            CaptureArtAnchor(_cell._startCellView?.transform);
+            CaptureArtAnchor(_cell._monopolyView?._element?.transform,centerBase:true);
+            CaptureArtAnchor(_cell._trapView?.transform);
+            CaptureArtAnchor(_cell._saleEffectHolder);
+            CaptureArtAnchor(_cell._cardEffectHolder?.transform);
+            CaptureArtAnchor(_cell._diceNumbersView?.transform);
+            CaptureArtAnchor(_cell._blackoutsView?.transform);
+            CaptureArtAnchor(_cell._starRatingStamp?.transform);
+            // Service cells have no BuildingView/build parent. Their native
+            // upright ship/stadium/island/start art is explicitly cataloged
+            // by this orderable component, independently of the ground sprite.
+            CellObjectsRenderer objects=_cell._cellRenderer?.GetComponent<CellObjectsRenderer>();
+            if(objects?._imagesArray!=null)
+                foreach(SpriteRenderer image in objects._imagesArray)
+                    if(image!=null && image.Pointer!=Renderer.Pointer)
+                        CaptureArtAnchor(image.transform,.60f,planarImage:_nativeChance?image:null);
+            for(int index=_artAnchors.Count-1;index>=0;index--)
+                if(!_artAnchors[index].IsOwned || !_discoveredArt.Contains(_artAnchors[index].InstanceId))
+                { _artAnchors[index].Restore();_artAnchors.RemoveAt(index); }
+            _artAnchors.Sort((first,second)=>first.Depth.CompareTo(second.Depth));
         }
         internal bool Matches(CellView cell)=>_cell.Pointer==cell.Pointer &&
             _cell._cellRenderer?._renderer?.Pointer==Renderer.Pointer;
         private Vector3 World(NVector2 point)=>_planeXY?new Vector3(point.X,point.Y,_planeDepth):new Vector3(point.X,_planeDepth,point.Y);
         private Vector2 Planar(Vector3 point)=>new(point.x,_planeXY?point.y:point.z);
+
+        private void CaptureArtAnchor(Transform transform,float minimumOuterFraction=0f,
+            bool centerBase=false,SpriteRenderer planarImage=null)
+        {
+            if(transform==null || transform.Pointer==_cell.transform.Pointer ||
+                transform.Pointer==Renderer.transform.Pointer) return;
+            int instanceId=transform.GetInstanceID();
+            _discoveredArt.Add(instanceId);
+            foreach(ArtAnchor anchor in _artAnchors)
+            {
+                if(anchor.IsOwned && anchor.InstanceId==instanceId)return;
+                // A captured owner already moves every child. Capturing the
+                // child as well would erase its native relative offset.
+                if(anchor.IsOwned && IsDescendant(transform,anchor.Transform))return;
+            }
+            int depth=0;
+            Transform ancestor=transform;
+            while(ancestor!=null && ancestor.Pointer!=_cell.transform.Pointer)
+            { depth++; ancestor=ancestor.parent; }
+            // Never move a shared scene object or an unrelated prefab owner.
+            if(ancestor==null)return;
+            // Native loading may reveal a broader owner after a child was
+            // catalogued. Release our child edits before capturing that owner.
+            for(int index=_artAnchors.Count-1;index>=0;index--)
+                if(IsDescendant(_artAnchors[index].Transform,transform))
+                { _artAnchors[index].Restore();_artAnchors.RemoveAt(index); }
+            var source=new NVector2[4];var target=new NVector2[4];
+            for(int index=0;index<4;index++)
+            {
+                Vector2 a=Planar(_sourceQuad[index]),b=Planar(_targetQuad[index]);
+                source[index]=new NVector2(a.x,a.y);target[index]=new NVector2(b.x,b.y);
+            }
+            Vector3 native=transform.position;
+            if(_applied)native-=_cell.transform.position-_rootPosition;
+            Vector2 planar=Planar(native);
+            NVector2 mapped=centerBase?BoardArtworkLayoutRules.BaseCenter(target):
+                CanonicalTileProjection.ProjectAnchor(source,target,
+                    new NVector2(planar.x,planar.y),.1f,minimumOuterFraction);
+            Vector3 position=_planeXY?new Vector3(mapped.X,mapped.Y,native.z):
+                new Vector3(mapped.X,native.y,mapped.Y);
+            _artAnchors.Add(new ArtAnchor(transform,_cell.transform,position-_appliedRootPosition,depth,planarImage));
+        }
+
+        private static bool IsDescendant(Transform candidate,Transform owner)
+        {
+            if(candidate==null || owner==null)return false;
+            Transform parent=candidate.parent;
+            while(parent!=null)
+            { if(parent.Pointer==owner.Pointer)return true;parent=parent.parent; }
+            return false;
+        }
+
+        private void SyncArtwork(Camera camera)
+        {
+            if(!_applied || !OwnsCell || Time.unscaledTime<_nextArtRefresh)return;
+            _nextArtRefresh=Time.unscaledTime+.1f;
+            try
+            {
+                DiscoverArtwork();
+                foreach(ArtAnchor anchor in _artAnchors)
+                {
+                    anchor.Apply();
+                    anchor.FitPlanar(camera,_targetQuad);
+                }
+            }
+            catch(Exception ex)
+            {
+                if(!_artWarning)
+                { _artWarning=true;Plugin.ModLog.LogWarning($"Native artwork fitting skipped safely on cell {_cell._cellId}: {ex.Message}"); }
+            }
+        }
 
         private static Vector3[] OrderFace(Vector3[] face,Vector2 center,Vector2 tangent,bool xy)
         {
@@ -335,6 +471,8 @@ internal static class CanonicalBoardPresentation
             Vector3 sourceCenter=Vector3.zero;foreach(Vector3 point in _sourceQuad)sourceCenter+=point*0.25f;
             _extra=PentagonalBoardPatch.EnsureFifthPawnPlace(_cell);
             _cell.transform.position+=_center-sourceCenter;
+            _applied=true;
+            foreach(ArtAnchor anchor in _artAnchors)anchor.Apply();
             var corners=new Il2CppStructArray<Vector3>(4);
             for(int index=0;index<4;index++)corners[index]=_cell.transform.InverseTransformPoint(_targetQuad[index]);
             _cell._cornersArray=corners;
@@ -380,6 +518,7 @@ internal static class CanonicalBoardPresentation
         internal void Sync(Camera camera=null)
         {
             if(Renderer==null)return;
+            SyncArtwork(camera ?? Camera.main);
             Sprite sprite=Renderer.sprite;
             if(sprite==null)return;
             IntPtr material = Renderer.sharedMaterial?.Pointer ?? IntPtr.Zero;
@@ -405,6 +544,11 @@ internal static class CanonicalBoardPresentation
                 Vector2 a=Planar(_sourceQuad[index]),b=Planar(_targetQuad[index]);
                 source[index]=new NVector2(a.x,a.y);target[index]=new NVector2(b.x,b.y);
             }
+            // The basic CellService has no catalogue icon: its Chance wheel
+            // is baked into the native tile texture. Inset only that painted
+            // surface; the full canonical bed, collider, labels and route
+            // remain unchanged. Separate tournament/crown art is fitted too.
+            if(_nativeChance)target=BoardArtworkLayoutRules.InsetChanceGround(target);
             var positions=new NVector2[vertices.Length];var texture=new NVector2[uv.Length];
             for(int index=0;index<vertices.Length;index++)
             {
@@ -429,6 +573,7 @@ internal static class CanonicalBoardPresentation
                 if(_cell==null)return;
                 _label?.Restore();
                 _rentLabel?.Restore();
+                foreach(ArtAnchor anchor in _artAnchors)anchor.Restore();
                 _cell.transform.position=_rootPosition;_cell._pressCellStartPosition=_press;
                 _cell._cornersArray=_corners;_cell._slots=_slots;_cell._iconVisualPositions=_points;_cell.IconVisualOrders=_orders;
                 for(int index=0;index<_pointValues.Length;index++)_points[index]=_pointValues[index];
@@ -441,6 +586,93 @@ internal static class CanonicalBoardPresentation
                 try { if(Renderer!=null)Renderer.forceRenderingOff=_forceOff; } catch { }
                 try { if(_extra!=null)UnityEngine.Object.Destroy(_extra.gameObject); } catch { }
             }
+        }
+
+        private sealed class ArtAnchor
+        {
+            internal readonly Transform Transform;
+            internal readonly int Depth;
+            internal readonly int InstanceId;
+            private readonly Transform _parent;
+            private readonly Transform _cellRoot;
+            private readonly int _parentId,_cellRootId,_rendererId;
+            private readonly SpriteRenderer _planarImage;
+            private readonly Vector3 _nativeLocalPosition,_nativeLocalScale,_targetOffset;
+            private Vector3 _assignedPosition,_assignedScale;
+            private bool _ownsPosition,_ownsScale;
+            internal ArtAnchor(Transform transform,Transform cellRoot,Vector3 targetOffset,int depth,SpriteRenderer planarImage)
+            {
+                Transform=transform;Depth=depth;_parent=transform.parent;
+                InstanceId=transform.GetInstanceID();_parentId=_parent?.GetInstanceID()??0;
+                _cellRoot=cellRoot;_cellRootId=cellRoot.GetInstanceID();
+                _nativeLocalPosition=transform.localPosition;_nativeLocalScale=transform.localScale;
+                _targetOffset=targetOffset;_planarImage=planarImage;_rendererId=planarImage?.GetInstanceID()??0;
+            }
+            internal bool IsOwned=>Transform!=null && Transform.GetInstanceID()==InstanceId &&
+                Transform.parent?.Pointer==_parent?.Pointer && (_parent?.GetInstanceID()??0)==_parentId &&
+                _cellRoot!=null && _cellRoot.GetInstanceID()==_cellRootId && IsDescendant(Transform,_cellRoot) &&
+                (_planarImage==null || _planarImage.GetInstanceID()==_rendererId);
+            internal void Apply()
+            {
+                if(!IsOwned)return;
+                Transform.position=_cellRoot.position+_targetOffset;
+                _assignedPosition=Transform.localPosition;_ownsPosition=true;
+            }
+
+            internal void FitPlanar(Camera camera,Vector3[] targetQuad)
+            {
+                // Upright flags, buildings and animated GAF clips are never
+                // flattened, billboarded or scaled by the footprint policy.
+                if(_planarImage==null || !IsOwned || camera==null || !camera.orthographic ||
+                    !_planarImage.enabled || !_planarImage.gameObject.activeInHierarchy || _planarImage.sprite==null)return;
+                Bounds bounds=_planarImage.localBounds;
+                if(!Finite(bounds.center) || !Finite(bounds.extents) || bounds.size.x<=.00001f ||
+                    bounds.size.y<=.00001f || bounds.extents.z<0f)return;
+                // Evaluate the original scale without temporarily enlarging
+                // the live renderer. Include all eight bounds corners, not its
+                // pivot or a single width, in the camera-plane containment.
+                Matrix4x4 matrix=(_parent==null?Matrix4x4.identity:_parent.localToWorldMatrix)*
+                    Matrix4x4.TRS(Transform.localPosition,Transform.localRotation,_nativeLocalScale);
+                Vector3 visibleCenter=matrix.MultiplyPoint3x4(bounds.center);
+                Vector3 cameraCenter=camera.transform.InverseTransformPoint(visibleCenter);
+                var offsets=new NVector2[8];var quad=new NVector2[4];
+                for(int index=0;index<8;index++)
+                {
+                    Vector3 corner=bounds.center+new Vector3((index&1)==0?-bounds.extents.x:bounds.extents.x,
+                        (index&2)==0?-bounds.extents.y:bounds.extents.y,(index&4)==0?-bounds.extents.z:bounds.extents.z);
+                    Vector3 point=camera.transform.InverseTransformPoint(matrix.MultiplyPoint3x4(corner));
+                    offsets[index]=new NVector2(point.x-cameraCenter.x,point.y-cameraCenter.y);
+                }
+                for(int index=0;index<4;index++)
+                {
+                    Vector3 point=camera.transform.InverseTransformPoint(targetQuad[index]);
+                    quad[index]=new NVector2(point.x,point.y);
+                }
+                NVector2 center=BoardArtworkLayoutRules.BaseCenter(quad);
+                float scale=BoardArtworkLayoutRules.FitPlanarScale(quad,center,offsets);
+                if(scale<=0f)return;
+                Transform.localScale=_nativeLocalScale*scale;
+                // Preserve the native distance along the view axis. Only the
+                // visible x/y center is shifted into this cell's own footprint.
+                Vector3 actualCenter=Transform.TransformPoint(bounds.center);
+                Vector3 actualCamera=camera.transform.InverseTransformPoint(actualCenter);
+                Transform.position+=camera.transform.right*(center.X-actualCamera.x)+
+                    camera.transform.up*(center.Y-actualCamera.y);
+                _assignedPosition=Transform.localPosition;_assignedScale=Transform.localScale;
+                _ownsPosition=true;_ownsScale=true;
+            }
+
+            internal void Restore()
+            {
+                if(!IsOwned)return;
+                // A native animation or a new owner may have written these
+                // values since our last fit. Restore only our remaining edits.
+                if(_ownsPosition && Same(Transform.localPosition,_assignedPosition))Transform.localPosition=_nativeLocalPosition;
+                if(_ownsScale && Same(Transform.localScale,_assignedScale))Transform.localScale=_nativeLocalScale;
+                _ownsPosition=false;_ownsScale=false;
+            }
+            private static bool Same(Vector3 a,Vector3 b)=>(a-b).sqrMagnitude<1e-10f;
+            private static bool Finite(Vector3 point)=>float.IsFinite(point.x)&&float.IsFinite(point.y)&&float.IsFinite(point.z);
         }
     }
 

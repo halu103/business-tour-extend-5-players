@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.0-preview.2'
+    [string]$Version = '0.2.2'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +15,8 @@ $payloadRoot = Join-Path $workRoot 'payload'
 $generatedRoot = Join-Path $workRoot 'generated'
 $outputRoot = Join-Path $projectRoot 'dist'
 $artifactRoot = Join-Path $projectRoot 'artifacts'
+$releaseFileNames = @('BusinessTourFiveRealms-Setup.exe', 'BusinessTourFiveRealms-Uninstall.exe',
+    'README.md', 'RELEASE_NOTES.md', 'PRE_RELEASE_NOTES.md', 'THIRD_PARTY_NOTICES.md', 'SHA256SUMS.txt')
 $pluginProject = Join-Path $projectRoot 'src\BusinessTourFiveRealms\BusinessTourFiveRealms.csproj'
 $pluginDll = Join-Path $projectRoot 'src\BusinessTourFiveRealms\bin\Release\net6.0\BusinessTourFiveRealms.dll'
 $bepInExZip = Join-Path $projectRoot ('.tools\bepinex-788\BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.{0}+5b766a3.zip' -f $compat.bepInExBuild)
@@ -141,24 +143,36 @@ Assert-Hash $bepInExZip $compat.bepInExPackageSha256
 if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) { throw "Portable .NET SDK is missing: $dotnet" }
 if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw "64-bit .NET Framework compiler is missing: $csc" }
 
+& (Join-Path $PSScriptRoot 'Test-InstallerEnglish.ps1') -Version $Version -SourceOnly
+
 # Test the exact pure generation policy compiled into the mod before clearing
 # or replacing any existing release outputs.
-& $dotnet run --project (Join-Path $projectRoot 'tests\LayoutRules\LayoutRules.csproj') -c Release --nologo
+& $dotnet run --project (Join-Path $projectRoot 'tests\LayoutRules\LayoutRules.csproj') -c Release --no-restore --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Two-trap generation regression failed.' }
-& $dotnet run --project (Join-Path $projectRoot 'tests\BoardGeometry\BoardGeometry.csproj') -c Release --nologo
+& $dotnet run --project (Join-Path $projectRoot 'tests\BoardGeometry\BoardGeometry.csproj') -c Release --no-restore --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Canonical board geometry regression failed.' }
-& $dotnet run --project (Join-Path $projectRoot 'tests\TileProjection\TileProjection.csproj') -c Release --nologo
+& $dotnet run --project (Join-Path $projectRoot 'tests\TileProjection\TileProjection.csproj') -c Release --no-restore --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Native tile clipping regression failed.' }
-& $dotnet run --project (Join-Path $projectRoot 'tests\BoardLabels\BoardLabels.csproj') -c Release --nologo
+& $dotnet run --project (Join-Path $projectRoot 'tests\BoardLabels\BoardLabels.csproj') -c Release --no-restore --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Native label footprint regression failed.' }
-& $dotnet run --project (Join-Path $projectRoot 'tests\PaymentLayout\PaymentLayout.csproj') -c Release --nologo
+& $dotnet run --project (Join-Path $projectRoot 'tests\BoardArtwork\BoardArtwork.csproj') -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Native Chance artwork containment regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\PaymentLayout\PaymentLayout.csproj') -c Release --no-restore --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Payment UI sizing regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\GameplayHud\GameplayHud.csproj') -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Gameplay toolbar, popup and money presentation regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\FifthLobby\FifthLobby.csproj') -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Fifth-seat readiness and palette regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\Topology\Topology.csproj') -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Forty-cell topology regression failed.' }
+& $dotnet run --project (Join-Path $projectRoot 'tests\ServiceArt\ServiceArt.csproj') -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Native service artwork compatibility regression failed.' }
 
 $referenceRoot = Join-Path $GameRoot 'BepInEx'
 if (-not (Test-Path -LiteralPath (Join-Path $referenceRoot 'interop\Assembly-CSharp.dll') -PathType Leaf)) {
     throw 'Open the compatible game with BepInEx once before building; current game interop references are required.'
 }
-& $dotnet build $pluginProject -c Release --nologo ("/p:BepInExRoot={0}" -f $referenceRoot) ("/p:Version={0}" -f $Version)
+& $dotnet build $pluginProject -c Release --no-restore --nologo ("/p:BepInExRoot={0}" -f $referenceRoot) ("/p:Version={0}" -f $Version)
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build failed.' }
 $actualAssemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($pluginDll).Version.ToString(3)
 $actualReleaseVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($pluginDll).ProductVersion
@@ -181,7 +195,10 @@ if ($actualAssemblyVersion -ne $assemblyVersion -or $actualReleaseVersion -ne $V
 # Keep the previous release intact until compilation, metadata and native-patch
 # checks succeed. Only these validated generated directories are replaced.
 Reset-WorkspaceDirectory $workRoot
-Reset-WorkspaceDirectory $outputRoot
+# Dist may contain the user's older RARs or other exports. Replace only our
+# generated filenames and package the explicit release set, never clear it.
+[void](Assert-WorkspaceChild $outputRoot)
+New-Item -Path $outputRoot -ItemType Directory -Force | Out-Null
 New-Item -Path $artifactRoot -ItemType Directory -Force | Out-Null
 New-Item -Path $payloadRoot -ItemType Directory -Force | Out-Null
 New-Item -Path $generatedRoot -ItemType Directory -Force | Out-Null
@@ -196,6 +213,7 @@ Copy-Item -LiteralPath $pluginDll -Destination (Join-Path $modRoot 'BusinessTour
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $modRoot 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $modRoot 'THIRD_PARTY_NOTICES.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'PRE_RELEASE_NOTES.md') -Destination (Join-Path $modRoot 'PRE_RELEASE_NOTES.md') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'RELEASE_NOTES.md') -Destination (Join-Path $modRoot 'RELEASE_NOTES.md') -Force
 
 $modManifest = [ordered]@{
     modId = 'vn.businesstour.fiverealms'
@@ -206,10 +224,14 @@ $modManifest = [ordered]@{
     steamBuildId = [string]$compat.steamBuildId
     unityVersion = [string]$compat.unityVersion
     playerCount = 5
-    boardCellCount = 32
-    fifthResortImplemented = $false
+    boardCellCount = 40
+    fifthResortImplemented = $true
     maximumStaticTraps = 2
-    mapId = 'BT5_FIVE_REALMS_V1'
+    chanceCellCount = 3
+    lostIslandCellCount = 2
+    taxCellCount = 2
+    resortCellCount = 5
+    mapId = 'BT5_FIVE_REALMS_V3'
     boardShape = 'five-sided-pointed-pentagon'
 }
 $modManifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $modRoot 'mod-manifest.json') -Encoding utf8NoBOM
@@ -295,21 +317,27 @@ $uninstallArgs = $commonArgs + @(
 & $csc @uninstallArgs
 if ($LASTEXITCODE -ne 0) { throw 'Uninstaller build failed.' }
 
+# Inspect fresh forms in memory without opening a window or touching game files.
+& (Join-Path $PSScriptRoot 'Test-InstallerEnglish.ps1') -Version $Version `
+    -SetupExe $setupExe -UninstallExe $uninstallExe
+
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $outputRoot -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $outputRoot -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'PRE_RELEASE_NOTES.md') -Destination $outputRoot -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'RELEASE_NOTES.md') -Destination $outputRoot -Force
 
 $sumLines = @()
-foreach ($file in Get-ChildItem -LiteralPath $outputRoot -File | Sort-Object Name) {
-    if ($file.Name -ne 'SHA256SUMS.txt') {
-        $sumLines += ('{0}  {1}' -f (Get-Sha256 $file.FullName), $file.Name)
+foreach ($name in ($releaseFileNames | Sort-Object)) {
+    if ($name -ne 'SHA256SUMS.txt') {
+        $sumLines += ('{0}  {1}' -f (Get-Sha256 (Join-Path $outputRoot $name)), $name)
     }
 }
 $sumLines | Set-Content -LiteralPath (Join-Path $outputRoot 'SHA256SUMS.txt') -Encoding ascii
 
 $releaseZip = Join-Path $artifactRoot ("BusinessTourFiveRealms-{0}-win-x64.zip" -f $Version)
 if (Test-Path -LiteralPath $releaseZip) { Remove-Item -LiteralPath $releaseZip -Force }
-Compress-Archive -Path (Join-Path $outputRoot '*') -DestinationPath $releaseZip -CompressionLevel Optimal
+$releasePaths = @($releaseFileNames | ForEach-Object { Join-Path $outputRoot $_ })
+Compress-Archive -LiteralPath $releasePaths -DestinationPath $releaseZip -CompressionLevel Optimal
 (Get-Sha256 $releaseZip) | Set-Content -LiteralPath ($releaseZip + '.sha256') -Encoding ascii
 
 Write-Host "Release ready: $releaseZip"

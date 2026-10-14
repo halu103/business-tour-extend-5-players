@@ -20,7 +20,7 @@ function Require-SourceText([string]$Source, [string]$Expected, [string]$File) {
 }
 
 $sources = @{}
-foreach ($name in @('Installer.cs', 'Uninstaller.cs', 'Shared.cs')) {
+foreach ($name in @('Installer.cs', 'Uninstaller.cs', 'Shared.cs', 'UnityLibraryCache.cs')) {
     $path = Join-Path $projectRoot (Join-Path 'installer' $name)
     $source = [System.IO.File]::ReadAllText($path)
     $nonAscii = [regex]::Match($source, '[^\x00-\x7F]')

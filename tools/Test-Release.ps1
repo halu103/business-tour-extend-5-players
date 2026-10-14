@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.2',
+    [string]$Version = '0.2.3',
     [string]$PreviousReleaseZip
 )
 
@@ -220,6 +220,20 @@ if (-not (Test-Path -LiteralPath $plugin) -or -not (Test-Path -LiteralPath $mark
 }
 Assert-ManagedInstall $true 'Initial installation'
 
+$unityCacheRelative = 'BepInEx\unity-libs\6000.0.58.zip'
+$unityCache = Resolve-TestFile $unityCacheRelative
+$compat = Get-Content -LiteralPath (Join-Path $projectRoot 'config\compatibility.json') -Raw | ConvertFrom-Json
+Assert-Hash $unityCache $compat.unityLibrariesSha256
+# Reproduce the screenshot's cached non-ZIP response. Verification must be
+# read-only; reinstall must recover it before BepInEx next starts.
+'<html>blocked download</html>' | Set-Content -LiteralPath $unityCache -Encoding ascii
+$brokenCacheHash = Get-Sha256 $unityCache
+Invoke-Checked $setup @('--verify-only', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-corrupt-cache-verify.log'))
+Assert-Hash $unityCache $brokenCacheHash
+Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-corrupt-cache-repair.log'))
+Assert-Hash $unityCache $compat.unityLibrariesSha256
+Assert-ManagedInstall $false 'Corrupted Unity ZIP recovery'
+
 # A repeat installation of this exact preview must also be safe. This does
 # not claim to test upgrading from an older release.
 Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-upgrade.log'))
@@ -242,6 +256,7 @@ foreach ($file in $expectedManifest.Files) {
 Assert-GamePreserved
 
 # Reproduce the user's uninstall -> reinstall workflow using this same package.
+Assert-Hash $unityCache $compat.unityLibrariesSha256
 Invoke-Checked $setup @('--install', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'setup-after-uninstall.log'))
 Assert-ManagedInstall $false 'Installation after uninstall'
 Invoke-Checked $uninstall @('--uninstall', '--game-root', $testRoot, '--log', (Join-Path $logRoot 'uninstall-after-reinstall.log'))

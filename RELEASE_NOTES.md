@@ -1,4 +1,25 @@
-# Five Realms 0.2.2
+# Five Realms 0.2.3
+
+Unity library cache recovery - 14 October 2026. Unofficial client mod.
+
+- Fix the installer gap behind `End of Central Directory record could not
+  be found` on `BepInEx\unity-libs\6000.0.58.zip`. With default BepInEx
+  settings, that failure prevents interop generation and then produces the
+  missing `UnityEngine.CoreModule` error before Five Realms is loaded.
+- Check the cached ZIP using the supported SHA-256 and required core-module
+  entry. Download a missing or damaged archive from the official BepInEx
+  library server into staging; retry failed verification up to three times.
+- Complete all download checks before modifying game files. Replace the
+  archive through the existing backup and rollback transaction. Keep a
+  healthy cache without downloading it again.
+- Warn when `[IL2CPP] UpdateInteropAssemblies = false` blocks normal
+  regeneration. User configuration and custom interop paths are not rewritten.
+- Uninstall keeps the shared Unity library cache alongside BepInEx. The
+  release does not bundle Unity or generated game interop assemblies.
+- Retain the English installer and 0.2.2 gameplay. Live recovery on the
+  reporting friend's PC still requires running Setup and restarting there.
+
+## Previous 0.2.2 installer changes
 
 English installer release — 12 October 2026. Unofficial client mod.
 

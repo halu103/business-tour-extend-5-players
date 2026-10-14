@@ -172,6 +172,8 @@ namespace BusinessTourFiveRealmsInstaller
                 ValidatePayloadLayout(payload.Manifest);
                 LoaderState state = InspectLoader(gameRoot, payload.Manifest, log);
                 ReadExistingMarker(gameRoot, true, log);
+                UnityLibraryCache.WarnAboutDisabledGeneration(gameRoot, log);
+                UnityLibraryCache.Inspect(gameRoot, log);
                 log(state == LoaderState.Exact
                     ? "Checks passed. The compatible BepInEx loader will be kept."
                     : "Checks passed. The compatible BepInEx loader can be installed.");
@@ -188,6 +190,8 @@ namespace BusinessTourFiveRealmsInstaller
                 ValidatePayloadLayout(payload.Manifest);
                 LoaderState loaderState = InspectLoader(gameRoot, payload.Manifest, log);
                 InstallMarker oldMarker = ReadExistingMarker(gameRoot, true, log);
+                // Download and validate before any install transaction begins.
+                string stagedUnityLibraries = UnityLibraryCache.Stage(gameRoot, payload.Root, log);
 
                 List<PayloadFile> modFiles = payload.Manifest.Files
                     .Where(file => String.Equals(file.Scope, "mod", StringComparison.Ordinal))
@@ -220,6 +224,8 @@ namespace BusinessTourFiveRealmsInstaller
                 }
                 transactionPaths.AddRange(obsoleteModPaths);
                 transactionPaths.Add(MarkerRelativePath);
+                if (stagedUnityLibraries != null)
+                    transactionPaths.Add(UnityLibraryCache.RelativePath);
 
                 BackupSession backup = BackupSession.Create(gameRoot, transactionPaths, log);
                 try
@@ -246,6 +252,8 @@ namespace BusinessTourFiveRealmsInstaller
                     {
                         DeleteOwnedFile(gameRoot, relative);
                     }
+
+                    UnityLibraryCache.Commit(gameRoot, stagedUnityLibraries, log);
 
                     var marker = new InstallMarker
                     {

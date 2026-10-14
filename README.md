@@ -1,6 +1,6 @@
 # Business Tour — Five Realms
 
-**0.2.2 English installer release package** for Business Tour - Online Multiplayer Board Game
+**0.2.3 Unity cache recovery release package** for Business Tour - Online Multiplayer Board Game
 (Steam app `397900`, Unity IL2CPP). Unofficial client mod.
 
 This package is built at the user's request without reopening the game for
@@ -10,6 +10,11 @@ Do not use ranked games, tournaments or wagers.
 
 ## Features
 
+- Setup checks the Unity base-library ZIP before installation. A missing or
+  damaged cache is downloaded from the official BepInEx server, verified
+  against the supported SHA-256 and ZIP contents, and installed with a
+  recoverable backup. Invalid or interrupted downloads are retried up to
+  three times; if all fail, installation stops before changing game files.
 - Setup and Uninstall use simple English for their own labels, buttons,
   progress, warnings and results. Uninstall clearly states that Five Realms
   settings are removed too, while BepInEx and other mods are kept.
@@ -90,9 +95,34 @@ settings, retaining the shared BepInEx loader, unrelated plugins and the
 Steam game. Close any existing Setup or Uninstall window before trying again.
 
 First startup can take longer while BepInEx generates its IL2CPP cache.
+If no verified library ZIP is already cached, Setup requires access to
+`https://unity.bepinex.dev/libraries/6000.0.58.zip`. A healthy cache avoids
+this download. Unity base libraries and generated game interop assemblies
+are not bundled in this release.
 If the UI stays blank, close the game and inspect `BepInEx\LogOutput.log`.
 Review logs for personal data before sharing. The native game may send its
 own telemetry; the mod's local diagnostics are not a privacy guarantee.
+
+### Failed ZIP extraction / missing UnityEngine.CoreModule
+
+If startup reports `End of Central Directory record could not be found`
+for `BepInEx\unity-libs\6000.0.58.zip`, followed by a missing
+`UnityEngine.CoreModule` assembly, close the game and run **Install** from
+the 0.2.3 Setup against that same game folder. Setup verifies and replaces
+the broken archive while backing up its original bytes. BepInEx generates
+the interop assemblies on the next launch; allow the first startup to finish.
+
+For manual recovery, download the official ZIP linked above and verify its
+SHA-256:
+`D981F87AF82975A83BC02DD440C976024B39C132EA51A79AD718B18251FECD5D`.
+With the game closed, move the old `6000.0.58.zip` to a backup folder and
+place the verified replacement in `BepInEx\unity-libs`. Keep the ZIP intact;
+do not copy its managed DLLs into `BepInEx\interop` or `BepInEx\core`.
+
+The default `[IL2CPP] UpdateInteropAssemblies = true` in
+`BepInEx\config\BepInEx.cfg` allows regeneration. Setup warns if it is
+disabled and preserves that setting. Custom interop paths or a custom
+library-source filename need to be checked separately.
 
 ## Compatibility and verification
 
@@ -108,6 +138,8 @@ The user's 0.2.0 screenshot shows the V3 board and five cards, but also labels
 over pawns, oversized Chance artwork and displaced flags. This hotfix targets
 those presentation regressions without changing the V3 route or economics.
 Version 0.2.2 changes installer wording and language, not game logic.
+Version 0.2.3 adds verified Unity cache recovery to Setup; gameplay remains
+the same as 0.2.2.
 It has **not** been retested in-game, as requested. Automated tests and
 installer checks do not replace gameplay verification. See
 [release notes and limitations](RELEASE_NOTES.md).
@@ -131,9 +163,10 @@ references, cached BepInEx archive, portable .NET SDK and existing restore
 assets. The release build uses those local dependencies without restoration.
 
 ```powershell
-pwsh -NoProfile -File .\tools\Build-Release.ps1 -Version 0.2.2
-pwsh -NoProfile -File .\tools\Test-InstallerEnglish.ps1 -Version 0.2.2 -SetupExe .\dist\BusinessTourFiveRealms-Setup.exe -UninstallExe .\dist\BusinessTourFiveRealms-Uninstall.exe
-pwsh -NoProfile -File .\tools\Test-Release.ps1 -Version 0.2.2 -PreviousReleaseZip .\artifacts\BusinessTourFiveRealms-0.2.1-win-x64.zip
+pwsh -NoProfile -File .\tools\Build-Release.ps1 -Version 0.2.3
+pwsh -NoProfile -File .\tools\Test-InstallerEnglish.ps1 -Version 0.2.3 -SetupExe .\dist\BusinessTourFiveRealms-Setup.exe -UninstallExe .\dist\BusinessTourFiveRealms-Uninstall.exe
+pwsh -NoProfile -File .\tools\Test-UnityLibraryCache.ps1
+pwsh -NoProfile -File .\tools\Test-Release.ps1 -Version 0.2.3 -PreviousReleaseZip .\artifacts\BusinessTourFiveRealms-0.2.1-win-x64.zip
 ```
 
 Regression suites cover layout, geometry, projection, labels, payment,

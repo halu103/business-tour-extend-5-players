@@ -17,8 +17,8 @@ public sealed class Plugin : BasePlugin
 {
     public const string Guid = "vn.businesstour.fiverealms";
     public const string Name = "Business Tour Five Realms";
-    public const string Version = "0.2.2";
-    public const string ReleaseVersion = "0.2.2";
+    public const string Version = "0.2.3";
+    public const string ReleaseVersion = "0.2.3";
 
     internal static ManualLogSource ModLog { get; private set; } = null!;
     internal static ConfigEntry<bool> PreventAfkKick { get; private set; } = null!;

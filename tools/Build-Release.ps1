@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$GameRoot,
-    [string]$Version = '0.2.2'
+    [string]$Version = '0.2.3'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -270,6 +270,9 @@ namespace BusinessTourFiveRealmsInstaller
         internal const string BepInExBuild = "$(Escape-CSharp ([string]$compat.bepInExBuild))";
         internal const string SteamBuildId = "$(Escape-CSharp ([string]$compat.steamBuildId))";
         internal const string UnityVersion = "$(Escape-CSharp ([string]$compat.unityProductVersion))";
+        internal const string UnityLibrariesVersion = "$(Escape-CSharp ([string]$compat.unityLibrariesVersion))";
+        internal const string UnityLibrariesUrl = "$(Escape-CSharp ([string]$compat.unityLibrariesUrl))";
+        internal const string UnityLibrariesSha256 = "$(Escape-CSharp ([string]$compat.unityLibrariesSha256))";
         internal const string BusinessTourExeSha256 = "$(Escape-CSharp ([string]$compat.businessTourExeSha256))";
         internal const string GameAssemblySha256 = "$(Escape-CSharp ([string]$compat.gameAssemblySha256))";
         internal const string GlobalMetadataSha256 = "$(Escape-CSharp ([string]$compat.globalMetadataSha256))";
@@ -303,6 +306,7 @@ $setupArgs = $commonArgs + @(
     ('/resource:{0},BusinessTourFiveRealms.Payload.zip' -f $payloadZip),
     (Join-Path $projectRoot 'installer\Shared.cs'),
     (Join-Path $projectRoot 'installer\Installer.cs'),
+    (Join-Path $projectRoot 'installer\UnityLibraryCache.cs'),
     $buildInfoPath)
 & $csc @setupArgs
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
